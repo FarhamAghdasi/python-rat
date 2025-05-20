@@ -6,6 +6,9 @@ class Config {
     public static $SECRET_TOKEN = "1"; // توکن مخفی برای کلاینت‌ها
     public static $ENCRYPTION_KEY = "nTds2GHvEWeOGJibjZuaf8kY5T5YWyfMx4J3B1NA0Jo="; // کلید رمزنگاری (base64)
     public static $ADMIN_CHAT_ID = "";
+    public static $ONLINE_THRESHOLD = 300;
+    public static $WEBHOOK_SECRET = "";
+
     
     // Database Settings
     public static $DB_HOST = "localhost";

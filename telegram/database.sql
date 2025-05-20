@@ -27,7 +27,8 @@ CREATE TABLE commands (
 );
 
 CREATE TABLE allowed_users (
-    chat_id BIGINT PRIMARY KEY
+    chat_id BIGINT PRIMARY KEY,
+    selected_client_id VARCHAR(32) NULL
 );
 
 CREATE TABLE user_typelogs (

