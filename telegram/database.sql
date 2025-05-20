@@ -38,4 +38,12 @@ CREATE TABLE user_typelogs (
     created_at DATETIME NOT NULL
 );
 
+CREATE TABLE clipboard_logs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(32) NOT NULL,
+    content TEXT,
+    created_at DATETIME NOT NULL,
+    INDEX idx_client_id (client_id)
+);
+
 INSERT INTO allowed_users (chat_id) VALUES ('YOUR_ADMIN_CHAT_ID');

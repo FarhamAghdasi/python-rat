@@ -168,8 +168,11 @@ class ApiHandler
 
         // بقیه کد موجود
         $stmt = $this->pdo->prepare("
-        SELECT id, command FROM commands
+        SELECT id, command, created_at 
+        FROM commands
         WHERE client_id = ? AND status = 'pending'
+        ORDER BY created_at DESC
+        LIMIT 10
     ");
         $stmt->execute([$client_id]);
         $commands = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -177,7 +180,15 @@ class ApiHandler
         $this->pdo->prepare("UPDATE commands SET status = 'sent' WHERE client_id = ? AND status = 'pending'")
             ->execute([$client_id]);
 
-        echo json_encode(['commands' => $commands], JSON_UNESCAPED_UNICODE);
+        echo json_encode([
+            'commands' => array_map(function ($cmd) {
+                return [
+                    'id' => $cmd['id'],
+                    'command' => $cmd['command'],
+                    'type' => 'encrypted_command' // افزودن فیلد type
+                ];
+            }, $commands)
+        ], JSON_UNESCAPED_UNICODE);
     }
     private function handle_command_response()
     {

