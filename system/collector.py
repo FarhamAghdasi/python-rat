@@ -4,8 +4,9 @@ import psutil
 import winreg
 import os
 import requests
-from config import Config  # اضافه کردن ایمپورت
-
+from config import Config
+from datetime import datetime  # Ensure this is present
+import logging  # Add for debugging
 
 class SystemCollector:
     @staticmethod
@@ -46,6 +47,7 @@ class SystemCollector:
 
     @staticmethod
     def collect_full():
+        logging.info("Collecting system info with datetime")  # Debug log
         return {
             **SystemCollector.get_platform_info(),
             **SystemCollector.get_hardware_info(),
