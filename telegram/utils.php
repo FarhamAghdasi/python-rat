@@ -17,5 +17,15 @@ class Utils {
         ];
         file_put_contents(Config::$ERROR_LOG, json_encode($log_entry, JSON_UNESCAPED_UNICODE) . PHP_EOL, FILE_APPEND);
     }
+
+    public static function log_update($update, $message = '')
+    {
+        $log_entry = [
+            'time' => date('Y-m-d H:i:s'),
+            'message' => $message,
+            'update' => $update
+        ];
+        file_put_contents(Config::$TELEGRAM_LOG, json_encode($log_entry, JSON_UNESCAPED_UNICODE) . PHP_EOL, FILE_APPEND);
+    }
 }
 ?>
