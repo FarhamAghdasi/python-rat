@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/Config.php';
+require_once __DIR__ . '/config.php';
 
 $webhookUrl = Config::$SERVER_URL;
 $secretToken = Config::$WEBHOOK_SECRET;
