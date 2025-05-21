@@ -1,0 +1,16 @@
+CREATE TABLE IF NOT EXISTS command_logs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    chat_id VARCHAR(50) NOT NULL,
+    command TEXT NOT NULL,
+    response TEXT,
+    created_at DATETIME NOT NULL,
+    INDEX idx_chat_id (chat_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS users (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL UNIQUE,
+    is_active TINYINT(1) DEFAULT 1,
+    created_at DATETIME NOT NULL,
+    INDEX idx_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
