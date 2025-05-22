@@ -8,5 +8,7 @@ for /d /r %%i in (__pycache__) do (
     )
 )
 
+del errors.log
+
 echo Done.
 pause

