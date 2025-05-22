@@ -34,6 +34,50 @@ class CommandHandler:
         return handler(params)
 
     @staticmethod
+    def handle_system_command(params):
+        command = params.get('command')
+        if not command:
+            logging.error("No command provided")
+            raise CommandError("No command provided")
+        
+        # تبدیل دستور sleep به فرمت CMD
+        if command.lower().startswith('sleep'):
+            try:
+                # اگر کاربر زمان مشخص کرده (مثل sleep 10)
+                parts = command.split()
+                seconds = int(parts[1]) if len(parts) > 1 else 5  # پیش‌فرض 5 ثانیه
+                command = f"timeout /t {seconds} /nobreak"
+            except ValueError:
+                logging.error("Invalid sleep duration")
+                raise CommandError("Invalid sleep duration")
+        
+        try:
+            logging.info(f"Executing system command: {command}")
+            # اجرای مستقیم دستور در CMD
+            shell_cmd = ['cmd.exe', '/c', command]
+            
+            result = subprocess.run(
+                shell_cmd,
+                capture_output=True,
+                text=True,
+                timeout=300  # تایم‌اوت بالا برای دستورات طولانی
+            )
+            
+            output = {
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+                'returncode': result.returncode
+            }
+            logging.info(f"System command executed: {command}, returncode: {result.returncode}")
+            return output
+        except subprocess.TimeoutExpired:
+            logging.error(f"Command timed out: {command}")
+            raise CommandError(f"Command timed out: {command}")
+        except Exception as e:
+            logging.error(f"Failed to execute command: {command}, error: {str(e)}")
+            raise CommandError(f"Failed to execute command: {str(e)}")
+
+    @staticmethod
     def handle_file_operation(params):
         action = params.get('action')
         path = params.get('path')
@@ -66,6 +110,59 @@ class CommandHandler:
                     })
                 logging.info(f"Directory listing for {path}: {len(result)} items")
                 return {'files': result}
+            
+            elif action == 'recursive_list':
+                if not os.path.exists(path):
+                    logging.error(f"Path does not exist: {path}")
+                    raise CommandError(f"Path does not exist: {path}")
+                
+                result = []
+                def scan_directory(current_path, depth=0):
+                    try:
+                        for entry in os.listdir(current_path):
+                            full_path = os.path.join(current_path, entry)
+                            try:
+                                stat = os.stat(full_path)
+                                result.append({
+                                    'path': full_path,
+                                    'name': entry,
+                                    'type': 'directory' if os.path.isdir(full_path) else 'file',
+                                    'size': stat.st_size,
+                                    'modified': datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                                    'depth': depth
+                                })
+                                if os.path.isdir(full_path) and not os.path.islink(full_path):
+                                    scan_directory(full_path, depth + 1)
+                            except (PermissionError, OSError) as e:
+                                result.append({
+                                    'path': full_path,
+                                    'name': entry,
+                                    'type': 'error',
+                                    'error': str(e),
+                                    'depth': depth
+                                })
+                    except (PermissionError, OSError) as e:
+                        result.append({
+                            'path': current_path,
+                            'name': os.path.basename(current_path),
+                            'type': 'error',
+                            'error': str(e),
+                            'depth': depth
+                        })
+                
+                scan_directory(path)
+                # ذخیره نتایج در فایل موقت
+                temp_file = "recursive_list.txt"
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    for item in result:
+                        indent = "  " * item['depth']
+                        if item['type'] == 'error':
+                            f.write(f"{indent}[ERROR] {item['path']}: {item['error']}\n")
+                        else:
+                            size = round(item['size'] / 1024, 2)
+                            f.write(f"{indent}{item['type'][0].upper()}: {item['path']} ({size} KB, {item['modified']})\n")
+                logging.info(f"Recursive listing for {path} completed, saved to {temp_file}")
+                return {'file_path': temp_file}
             
             elif action == 'read':
                 if not os.path.isfile(path):
@@ -107,7 +204,6 @@ class CommandHandler:
             logging.error(f"File operation failed: {str(e)}")
             raise CommandError(f"File operation failed: {str(e)}")
 
-    # سایر توابع بدون تغییر باقی می‌مانند
     @staticmethod
     def handle_system_info(params):
         try:
@@ -124,48 +220,6 @@ class CommandHandler:
         except Exception as e:
             logging.error(f"Failed to collect system info: {str(e)}")
             raise CommandError(f"Failed to collect system info: {str(e)}")
-
-    @staticmethod
-    def handle_system_command(params):
-        command = params.get('command')
-        if not command:
-            logging.error("No command provided")
-            raise CommandError("No command provided")
-        
-        try:
-            logging.info(f"Executing system command: {command}")
-            if platform.system() == "Windows":
-                if command.strip().lower().startswith("sleep"):
-                    try:
-                        seconds = int(command.split()[1]) if len(command.split()) > 1 else 1
-                        command = f"timeout /t {seconds} /nobreak"
-                    except ValueError:
-                        logging.error("Invalid sleep duration")
-                        raise CommandError("Invalid sleep duration")
-                shell_cmd = ['cmd.exe', '/c', command]
-            else:
-                shell_cmd = ['/bin/sh', '-c', command]
-            
-            result = subprocess.run(
-                shell_cmd,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            output = {
-                'stdout': result.stdout,
-                'stderr': result.stderr,
-                'returncode': result.returncode
-            }
-            logging.info(f"System command executed: {command}, returncode: {result.returncode}")
-            return output
-        except subprocess.TimeoutExpired:
-            logging.error(f"Command timed out: {command}")
-            raise CommandError(f"Command timed out: {command}")
-        except Exception as e:
-            logging.error(f"Failed to execute command: {command}, error: {str(e)}")
-            raise CommandError(f"Failed to execute command: {str(e)}")
 
     @staticmethod
     def handle_screenshot(params):

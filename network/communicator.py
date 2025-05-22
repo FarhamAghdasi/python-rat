@@ -3,6 +3,7 @@ import json
 import logging
 from config import Config
 import warnings
+import base64
 import gzip
 warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
