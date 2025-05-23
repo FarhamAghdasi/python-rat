@@ -7,6 +7,7 @@ import base64
 import os
 import shutil
 import datetime
+import ctypes
 
 class CommandError(Exception):
     pass
@@ -24,7 +25,7 @@ class CommandHandler:
             'edit_hosts': CommandHandler.handle_edit_hosts,
             'open_url': CommandHandler.handle_open_url,
             'upload_file': CommandHandler.handle_upload_file,
-            'end_task': CommandHandler.handle_end_task  # اضافه شده
+            'end_task': CommandHandler.handle_end_task
         }
         
         handler = handlers.get(command_type)
@@ -42,7 +43,6 @@ class CommandHandler:
             raise CommandError("No process name provided")
         
         try:
-            # اجرای taskkill برای بستن پروسه
             result = subprocess.run(
                 ['taskkill', '/IM', process_name, '/F'],
                 capture_output=True,
@@ -80,27 +80,40 @@ class CommandHandler:
             logging.error("No command provided")
             raise CommandError("No command provided")
         
-        # تبدیل دستور sleep به فرمت CMD
-        if command.lower().startswith('sleep'):
+        # Map commands to Windows equivalents
+        COMMAND_MAPPING = {
+            'shutdown': 'shutdown /s /t 0',  # Immediate shutdown
+            'restart': 'shutdown /r /t 0',   # Immediate restart
+            'sleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',  # Sleep mode
+            'signout': 'logoff',            # Log off current user
+            'startup': 'start notepad.exe'  # Example: Open Notepad (customize as needed)
+        }
+        
+        # Check if running as admin for sensitive commands
+        sensitive_commands = ['shutdown', 'restart', 'sleep', 'signout']
+        if command.lower() in sensitive_commands:
             try:
-                # اگر کاربر زمان مشخص کرده (مثل sleep 10)
-                parts = command.split()
-                seconds = int(parts[1]) if len(parts) > 1 else 5  # پیش‌فرض 5 ثانیه
-                command = f"timeout /t {seconds} /nobreak"
-            except ValueError:
-                logging.error("Invalid sleep duration")
-                raise CommandError("Invalid sleep duration")
+                is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+                if not is_admin:
+                    logging.error(f"Command {command} requires admin privileges")
+                    raise CommandError(f"Command {command} requires admin privileges")
+            except Exception as e:
+                logging.error(f"Failed to check admin privileges: {str(e)}")
+                raise CommandError(f"Failed to check admin privileges: {str(e)}")
+        
+        # Apply command mapping
+        actual_command = COMMAND_MAPPING.get(command.lower(), command)
+        logging.info(f"Mapped command: {command} -> {actual_command}")
         
         try:
-            logging.info(f"Executing system command: {command}")
-            # اجرای مستقیم دستور در CMD
-            shell_cmd = ['cmd.exe', '/c', command]
+            logging.info(f"Executing system command: {actual_command}")
+            shell_cmd = ['cmd.exe', '/c', actual_command]
             
             result = subprocess.run(
                 shell_cmd,
                 capture_output=True,
                 text=True,
-                timeout=300  # تایم‌اوت بالا برای دستورات طولانی
+                timeout=300
             )
             
             output = {
@@ -108,13 +121,13 @@ class CommandHandler:
                 'stderr': result.stderr,
                 'returncode': result.returncode
             }
-            logging.info(f"System command executed: {command}, returncode: {result.returncode}")
+            logging.info(f"System command executed: {actual_command}, returncode: {result.returncode}")
             return output
         except subprocess.TimeoutExpired:
-            logging.error(f"Command timed out: {command}")
-            raise CommandError(f"Command timed out: {command}")
+            logging.error(f"Command timed out: {actual_command}")
+            raise CommandError(f"Command timed out: {actual_command}")
         except Exception as e:
-            logging.error(f"Failed to execute command: {command}, error: {str(e)}")
+            logging.error(f"Failed to execute command: {actual_command}, error: {str(e)}")
             raise CommandError(f"Failed to execute command: {str(e)}")
 
     @staticmethod
@@ -125,7 +138,6 @@ class CommandHandler:
             logging.error("Missing action or path")
             raise CommandError("Missing action or path")
         
-        # محدود کردن دسترسی به مسیرهای حساس
         restricted_paths = ['/etc', '/var', '/root', 'C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)']
         for restricted in restricted_paths:
             if path.lower().startswith(restricted.lower()):
@@ -191,7 +203,6 @@ class CommandHandler:
                         })
                 
                 scan_directory(path)
-                # ذخیره نتایج در فایل موقت
                 temp_file = "recursive_list.txt"
                 with open(temp_file, 'w', encoding='utf-8') as f:
                     for item in result:
@@ -208,7 +219,7 @@ class CommandHandler:
                 if not os.path.isfile(path):
                     logging.error(f"Not a file: {path}")
                     raise CommandError(f"Not a file: {path}")
-                if os.path.getsize(path) > 1024 * 1024:  # محدود به 1MB
+                if os.path.getsize(path) > 1024 * 1024:
                     logging.error(f"File too large: {path}")
                     raise CommandError(f"File too large: {path}")
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:

