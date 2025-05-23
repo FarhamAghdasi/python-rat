@@ -73,6 +73,16 @@ function decrypt($encryptedData, $key) {
             // چک کردن اینکه داده JSONه یا نه
             $jsonDecoded = json_decode($decrypted, true);
             if ($jsonDecoded !== null) {
+                // اگر شامل content بود (مثل edit_hosts)، خط‌به‌خط پردازش کن
+                if (isset($jsonDecoded['content']) && is_string($jsonDecoded['content'])) {
+                    // حذف BOM
+                    $content = preg_replace('/^\xEF\xBB\xBF/', '', $jsonDecoded['content']);
+                    // تبدیل به خطوط
+                    $lines = explode("\n", $content);
+                    $formattedContent = implode("\n", array_map('trim', $lines));
+                    error_log("Decrypt: Formatted content: " . substr($formattedContent, 0, 50), 3, Config::$ERROR_LOG);
+                    return $formattedContent;
+                }
                 error_log("Decrypt: JSON detected, formatting", 3, Config::$ERROR_LOG);
                 return json_encode($jsonDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
             }
@@ -100,6 +110,16 @@ function decrypt($encryptedData, $key) {
         // چک کردن اینکه داده JSONه یا نه
         $jsonDecoded = json_decode($uncompressed, true);
         if ($jsonDecoded !== null) {
+            // اگر شامل content بود (مثل edit_hosts)، خط‌به‌خط پردازش کن
+            if (isset($jsonDecoded['content']) && is_string($jsonDecoded['content'])) {
+                // حذف BOM
+                $content = preg_replace('/^\xEF\xBB\xBF/', '', $jsonDecoded['content']);
+                // تبدیل به خطوط
+                $lines = explode("\n", $content);
+                $formattedContent = implode("\n", array_map('trim', $lines));
+                error_log("Decrypt: Formatted content: " . substr($formattedContent, 0, 50), 3, Config::$ERROR_LOG);
+                return $formattedContent;
+            }
             error_log("Decrypt: JSON detected, formatting", 3, Config::$ERROR_LOG);
             return json_encode($jsonDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         }
@@ -187,14 +207,14 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
 
         // تولید محتوای فایل
         $content = "Client ID: {$log['client_id']}\n";
-        $content .= "Command: {$log['command']}\n";
+        $content = "Command: {$log['command']}\n";
         $content .= "Status: {$log['status']}\n";
         $content .= "Result:\n{$log['result']}\n";
         $content .= "Created At: {$log['created_at']}\n";
         $content .= "Completed At: " . ($log['completed_at'] ? $log['completed_at'] : 'N/A') . "\n";
 
         // تنظیم هدرها برای دانلود
-        header('Content-Type: text/plain');
+        header('Content-Type: text/plain; charset=utf-8');
         header('Content-Disposition: attachment; filename="log_' . $log_id . '.txt"');
         header('Content-Length: ' . strlen($content));
         echo $content;
