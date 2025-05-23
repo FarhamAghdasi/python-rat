@@ -83,8 +83,9 @@ function decrypt($encryptedData, $key) {
                     error_log("Decrypt: Formatted content: " . substr($formattedContent, 0, 50), 3, Config::$ERROR_LOG);
                     return $formattedContent;
                 }
-                error_log("Decrypt: JSON detected, formatting", 3, Config::$ERROR_LOG);
-                return json_encode($jsonDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                // برای JSON‌های دیگه (مثل file_operation)، یونیکد رو باز کن
+                error_log("Decrypt: JSON detected, formatting with unescaped unicode", 3, Config::$ERROR_LOG);
+                return json_encode($jsonDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }
 
             return $decrypted; // اگر JSON نبود، متن خام
@@ -120,8 +121,9 @@ function decrypt($encryptedData, $key) {
                 error_log("Decrypt: Formatted content: " . substr($formattedContent, 0, 50), 3, Config::$ERROR_LOG);
                 return $formattedContent;
             }
-            error_log("Decrypt: JSON detected, formatting", 3, Config::$ERROR_LOG);
-            return json_encode($jsonDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+            // برای JSON‌های دیگه (مثل file_operation)، یونیکد رو باز کن
+            error_log("Decrypt: JSON detected, formatting with unescaped unicode", 3, Config::$ERROR_LOG);
+            return json_encode($jsonDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         }
 
         return $uncompressed; // متن خام
@@ -129,6 +131,23 @@ function decrypt($encryptedData, $key) {
         error_log("Decrypt error: " . $e->getMessage() . ", raw data: " . substr($encryptedData, 0, 50), 3, Config::$ERROR_LOG);
         return '[Decryption error: ' . htmlspecialchars($e->getMessage()) . ']';
     }
+}
+
+// تابع برای فرمت کردن JSON به متن ساده برای فایل دانلود
+function formatJsonForDownload($jsonString) {
+    $jsonDecoded = json_decode($jsonString, true);
+    if ($jsonDecoded === null) {
+        return $jsonString; // اگر JSON نبود، متن خام
+    }
+
+    $output = [];
+    foreach ($jsonDecoded as $key => $value) {
+        if (is_array($value)) {
+            $value = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+        $output[] = "$key: $value";
+    }
+    return implode("\n", $output);
 }
 
 // رمز عبور هش‌شده برای داشبورد
@@ -157,7 +176,7 @@ if (isset($_GET['logout'])) {
 
 // دریافت لاگ‌ها با AJAX
 if (isset($_GET['get_logs']) && $logged_in) {
-    header('Content-Type: application/json');
+    header('Content-Type: application/json; charset=utf-8');
     try {
         $stmt = $pdo->query("
             SELECT id, client_id, command, status, result, created_at, updated_at, completed_at
@@ -172,10 +191,10 @@ if (isset($_GET['get_logs']) && $logged_in) {
             $log['result'] = $log['result'] ? decrypt($log['result'], Config::$ENCRYPTION_KEY) : '';
         }
         
-        echo json_encode(['logs' => $logs]);
+        echo json_encode(['logs' => $logs], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log("Failed to fetch logs: " . $e->getMessage(), 3, Config::$ERROR_LOG);
-        echo json_encode(['error' => 'Failed to fetch logs: ' . htmlspecialchars($e->getMessage())]);
+        echo json_encode(['error' => 'Failed to fetch logs: ' . htmlspecialchars($e->getMessage())], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
@@ -207,9 +226,10 @@ if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
 
         // تولید محتوای فایل
         $content = "Client ID: {$log['client_id']}\n";
-        $content = "Command: {$log['command']}\n";
+        $content .= "Command: {$log['command']}\n";
         $content .= "Status: {$log['status']}\n";
-        $content .= "Result:\n{$log['result']}\n";
+        $content .= "Result:\n";
+        $content .= formatJsonForDownload($log['result']) . "\n";
         $content .= "Created At: {$log['created_at']}\n";
         $content .= "Completed At: " . ($log['completed_at'] ? $log['completed_at'] : 'N/A') . "\n";
 
