@@ -47,6 +47,49 @@ class ServerCommunicator:
                 logging.error(f"Connection error: {str(e)}")
             raise CommunicationError(f"Connection error: {str(e)}")
 
+    def upload_vm_status(self, vm_details):
+        """
+        ارسال وضعیت VM به سرور.
+        """
+        try:
+            if Config.DEBUG_MODE:
+                logging.info(f"Preparing VM status upload: client_id={self.client_id}")
+
+            # رمزنگاری داده‌های VM
+            vm_details_json = json.dumps(vm_details, ensure_ascii=False)
+            encrypted_vm_details = self.encryption.encrypt(vm_details_json)
+
+            encrypted_data = {
+                "action": "upload_vm_status",
+                "client_id": self.client_id,
+                "token": self.token,
+                "vm_details": encrypted_vm_details
+            }
+
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending upload_vm_status: {encrypted_data}")
+
+            response = requests.post(
+                self.server_url,
+                data=encrypted_data,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False
+            )
+
+            if response.status_code != 200:
+                if Config.DEBUG_MODE:
+                    logging.error(f"VM status upload failed: status={response.status_code}, response={response.text}")
+                raise CommunicationError(f"VM status upload failed: {response.text}")
+
+            if Config.DEBUG_MODE:
+                logging.info("VM status upload successful")
+            return response.json()
+
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"VM status upload error: {str(e)}")
+            raise CommunicationError(f"VM status upload error: {str(e)}")
+
     def _handle_response(self, response):
         if Config.DEBUG_MODE:
             logging.info(f"Received response: status={response.status_code}, text={response.text[:100]}...")

