@@ -8,6 +8,7 @@ class Config {
     public static $ADMIN_CHAT_ID = "";
     public static $ONLINE_THRESHOLD = 300;
     public static $WEBHOOK_SECRET = "";
+    public static $BASE_URL = 'http://your-server.com';
 
     
     // Database Settings

@@ -50,6 +50,53 @@ class ServerCommunicator:
                 logging.error(f"Connection error: {str(e)}")
             raise CommunicationError(f"Connection error: {str(e)}")
 
+    def report_update(self, new_version: str) -> Dict:
+        """
+        گزارش به‌روزرسانی به سرور.
+        """
+        try:
+            if Config.DEBUG_MODE:
+                logging.info(f"Preparing update report: client_id={self.client_id}, new_version={new_version}")
+
+            report_data = {
+                "message": f"Updated to version {new_version}",
+                "client_id": self.client_id,
+                "new_version": new_version,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            encrypted_report = self.encryption.encrypt(json.dumps(report_data, ensure_ascii=False))
+
+            encrypted_data = {
+                "action": "report_update",
+                "client_id": self.client_id,
+                "token": self.token,
+                "report": encrypted_report
+            }
+
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending update report: {encrypted_data}")
+
+            response = requests.post(
+                self.server_url,
+                data=encrypted_data,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False
+            )
+
+            if response.status_code != 200:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Update report failed: status={response.status_code}, response={response.text}")
+                raise CommunicationError(f"Update report failed: {response.text}")
+
+            if Config.DEBUG_MODE:
+                logging.info("Update report sent successfully")
+            return response.json()
+
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Update report error: {str(e)}")
+            raise CommunicationError(f"Update report error: {str(e)}")
+
     def upload_vm_status(self, vm_details: Dict) -> Dict:
         try:
             if Config.DEBUG_MODE:

