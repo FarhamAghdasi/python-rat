@@ -243,6 +243,29 @@ if (isset($_GET['get_vm_status']) && $logged_in) {
     exit;
 }
 
+if (isset($_GET['get_rdp_logs']) && $logged_in) {
+    header('Content-Type: application/json; charset=utf-8');
+    try {
+        $stmt = $pdo->query("
+            SELECT id, client_id, message, created_at
+            FROM client_logs
+            WHERE log_type = 'rdp'
+            ORDER BY created_at DESC LIMIT 100
+        ");
+        $rdp_logs = $stmt->fetchAll();
+
+        foreach ($rdp_logs as &$log) {
+            $log['message'] = $log['message'] ? decrypt($log['message'], Config::$ENCRYPTION_KEY) : '';
+        }
+
+        echo json_encode(['rdp_logs' => $rdp_logs], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log("Failed to fetch RDP logs: " . $e->getMessage(), 3, Config::$ERROR_LOG);
+        echo json_encode(['error' => 'Failed to fetch RDP logs: ' . htmlspecialchars($e->getMessage())], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // Download log
 if (isset($_GET['download_log']) && $logged_in && isset($_GET['log_id'])) {
     try {
@@ -546,6 +569,10 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                     <h2 class="text-2xl font-semibold text-blue-400 mb-4">Client Data</h2>
                     <div id="client-data" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
                 </div>
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-2xl font-semibold text-purple-400 mb-4">RDP Connections</h2>
+                    <div id="rdp-logs" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
+                </div>
             </div>
             <!-- Full-screen modal for logs -->
             <div id="log-modal" class="modal">
@@ -571,6 +598,22 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                         <button id="log-download-log" class="py-2 px-4 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold">
                             Download Log
                         </button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="rdp-modal" class="modal">
+                <div class="modal-content">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-semibold text-yellow-500">RDP Connection Details</h2>
+                        <button id="close-rdp-modal" class="text-gray-400 hover:text-white text-2xl">×</button>
+                    </div>
+                    <div class="space-y-2">
+                        <p><strong>Client ID:</strong> <span id="rdp-modal-client-id"></span></p>
+                        <p><strong>Created At:</strong> <span id="rdp-modal-created-at"></span></p>
+                        <div>
+                            <textarea class="editor" id="rdp-modal-content" readonly></textarea>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -717,6 +760,69 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                     });
                 })
                 .catch(error => console.error('Error fetching VM status:', error));
+
+            fetch('?get_rdp_logs', {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error(data.error);
+                        return;
+                    }
+
+                    const rdpLogs = document.getElementById('rdp-logs');
+                    rdpLogs.innerHTML = '';
+
+                    data.rdp_logs.forEach(log => {
+                        const logElement = document.createElement('div');
+                        logElement.className = 'log-entry p-3 rounded-md bg-gray-900/50 border border-gray-700';
+                        logElement.dataset.log = JSON.stringify(log);
+                        let parsedData;
+                        try {
+                            parsedData = JSON.parse(log.message);
+                        } catch (e) {
+                            parsedData = {
+                                public_ip: 'N/A',
+                                username: 'N/A',
+                                status: 'Unknown'
+                            };
+                        }
+                        const status = parsedData.status === 'success' ? (parsedData.username ? 'Enabled' : 'Disabled') : 'Failed';
+                        logElement.innerHTML = `
+                <p class="text-sm text-gray-400">${new Date(log.created_at).toLocaleString()}</p>
+                <p class="text-gray-200"><strong>Client ID:</strong> ${log.client_id}</p>
+                <p class="text-gray-200"><strong>Status:</strong> ${status}</p>
+                <p class="text-gray-200"><strong>Public IP:</strong> ${parsedData.public_ip || 'N/A'}</p>
+                <p class="text-gray-200"><strong>Username:</strong> ${parsedData.username || 'N/A'}</p>
+            `;
+                        logElement.addEventListener('click', () => openRDPModal(log));
+                        rdpLogs.appendChild(logElement);
+                    });
+                })
+                .catch(error => console.error('Error fetching RDP logs:', error));
+
+            function openRDPModal(log) {
+                const modal = document.getElementById('rdp-modal');
+                document.getElementById('rdp-modal-client-id').textContent = log.client_id;
+                document.getElementById('rdp-modal-created-at').textContent = new Date(log.created_at).toLocaleString();
+                document.getElementById('rdp-modal-content').value = log.message || '{}';
+
+                modal.style.display = 'block';
+            }
+
+            document.getElementById('close-rdp-modal').addEventListener('click', () => {
+                document.getElementById('rdp-modal').style.display = 'none';
+            });
+
+            window.addEventListener('click', (event) => {
+                if (event.target === document.getElementById('rdp-modal')) {
+                    document.getElementById('rdp-modal').style.display = 'none';
+                }
+            });
 
             function openLogModal(log) {
                 const modal = document.getElementById('log-modal');

