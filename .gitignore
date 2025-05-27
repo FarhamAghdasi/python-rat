@@ -6,9 +6,6 @@ dist
 build
 
 # فایل لاگ
-errors.log
-
-# فایل‌های حساس یا خاص پروژه
-keylogger.log
-
+*.log
+*.json
 *.spec

