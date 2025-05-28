@@ -23,9 +23,6 @@ class Config:
     CLOUDFLARE_BINARY = "cloudflared.exe"
     CLOUDFLARE_SUBDOMAIN = "rdp" 
     CLOUDFLARE_DOMAIN = "example.com" 
-    SECRET_TOKEN = "your_secret_token"
-    SERVER_URL = "https://your_server_url"
-    DEBUG_MODE = True
 
     NGROK_AUTH_TOKEN = "2xg9jXmy291m3pWFGJ8xWNZGT4Q_3AYBu18nyLppQxTRvw35K"  # Replace with your ngrok auth token
     NGROK_BINARY = "ngrok.exe"  # Name of the ngrok binary included in the build
