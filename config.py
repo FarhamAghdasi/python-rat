@@ -21,6 +21,12 @@ class Config:
 
     # System Settings
     EMERGENCY_HOTKEY = "ctrl+alt+shift+k"
+
+    TAILSCALE_BINARY = "tailscale.exe"
+    TAILSCALE_AUTH_KEY = "tskey-xxxxx"
+    # DNS settings
+    PRIMARY_DNS = "178.22.122.100"  # Shecan primary
+    SECONDARY_DNS = "185.51.200.2"   # Shecan secondary
     
     # Debug Settings
     DEBUG_MODE = True  # Set to True to enable logging

