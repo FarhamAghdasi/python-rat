@@ -11,6 +11,11 @@ require_once __DIR__ . '/components/commands/vm.php';
 require_once __DIR__ . '/components/commands/wifi_passwords.php';
 require_once __DIR__ . '/components/encryption/encryption.php';
 require_once __DIR__ . '/components/handler/handler.php';
+require_once __DIR__ . '/components/helper/callback.php';
+require_once __DIR__ . '/components/helper/log.php';
+require_once __DIR__ . '/components/helper/report.php';
+require_once __DIR__ . '/components/helper/response.php';
+require_once __DIR__ . '/components/helper/users.php';
 
 class LoggerBot
 {
