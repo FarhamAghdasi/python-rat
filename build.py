@@ -8,7 +8,6 @@ MAIN_SCRIPT = "main.py"
 OUTPUT_DIR = "dist"
 MANIFEST_FILE = "manifest.xml"
 ICON_FILE = None  # Set to .ico file path if you have one (optional)
-NGROK_BINARY = "ngrok.exe"  # Path to ngrok binary
 
 # Clean previous build
 if os.path.exists(OUTPUT_DIR):
@@ -21,7 +20,6 @@ PyInstaller_args = [
     "--noconsole",  # No console window
     "--uac-admin",  # Request admin privileges
     f"--add-data={MANIFEST_FILE};.",
-    f"--add-data={NGROK_BINARY};.",
     "--onefile",  # Single executable
     "--hidden-import=keyboard",
     "--hidden-import=pyautogui",
@@ -32,10 +30,6 @@ PyInstaller_args = [
     "--clean",  # Clean cache
     f"--distpath={OUTPUT_DIR}",
 ]
-
-# Verify ngrok exists
-if not os.path.exists(NGROK_BINARY):
-    raise FileNotFoundError(f"NGROK binary {NGROK_BINARY} not found. Please download and place it in the project directory.")
 
 # Run PyInstaller
 PyInstaller.__main__.run(PyInstaller_args)
