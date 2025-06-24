@@ -33,7 +33,7 @@ jobs:
         echo "ENCRYPTION_KEY=dGVzdF9rZXk=" >> telegram/.env  # base64 of "test_key"
 
     - name: Upload to FTP
-      uses: SamKirkland/FTP-Deploy-Action@v4
+      uses: SamKirkland/FTP-Deploy-Action@4.0.0
       with:
         server: ${{ secrets.FTP_HOST }}
         username: ${{ secrets.FTP_USERNAME }}
