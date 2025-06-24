@@ -47,7 +47,18 @@ jobs:
         echo "ENCRYPTION_KEY=dGVzdF9rZXk=" >> telegram/.env
         echo "CLIENT_VERSION=${{ secrets.CLIENT_VERSION }}" >> telegram/.env
 
+    - name: Check if commit includes [upload]
+      id: check_upload
+      shell: bash
+      run: |
+        if git log -1 --pretty=%B | grep -iq "\[upload\]"; then
+          echo "upload=true" >> $GITHUB_OUTPUT
+        else
+          echo "upload=false" >> $GITHUB_OUTPUT
+        fi
+
     - name: Upload Telegram PHP to FTP
+      if: steps.check_upload.outputs.upload == 'true'
       uses: SamKirkland/FTP-Deploy-Action@4.0.0
       with:
         server: ${{ secrets.FTP_HOST }}
@@ -61,9 +72,9 @@ jobs:
           **/node_modules/*
 
     - name: Upload built EXE to FTP /updates/
+      if: steps.check_upload.outputs.upload == 'true'
       shell: bash
       run: |
         curl -T "dist/$RENAMED_FILE" \
           --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" \
           "ftp://${{ secrets.FTP_HOST }}${{ secrets.FTP_PATH }}/updates/$RENAMED_FILE"
-    
