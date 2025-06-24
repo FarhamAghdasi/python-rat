@@ -17,6 +17,10 @@ class Config:
     IP_URL = os.getenv("IP_URL", "https://default.server/ip.php")
     UPDATE_URL = os.getenv("UPDATE_URL", "https://default.server/version.php")
 
+    # Proxy Settings
+    PROXY_HTTP = os.getenv("PROXY_HTTP", None)
+    PROXY_HTTPS = os.getenv("PROXY_HTTPS", None)
+
     # Security Settings
     ENCRYPTION_KEY = base64.b64decode(os.getenv("ENCRYPTION_KEY", "dGVzdF9rZXk="))  # default is 'test_key' base64
     IV_LENGTH = 16

