@@ -13,16 +13,16 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    - name: Install Python dependencies (optional)
+    - name: Install Python & dependencies
       run: |
         python3 -m pip install --upgrade pip
-        pip install -r requirements.txt || true
+        pip install pyinstaller keyboard pyautogui psutil pyperclip pillow pywin32
 
     - name: Build Python client
       run: |
         python3 build.py
 
-    - name: Rename built client based on version
+    - name: Rename built EXE based on version
       run: |
         VERSION="${{ secrets.CLIENT_VERSION }}"
         RENAMED="version_${VERSION//./_}.exe"
@@ -45,7 +45,7 @@ jobs:
         echo "ENCRYPTION_KEY=dGVzdF9rZXk=" >> telegram/.env
         echo "CLIENT_VERSION=${{ secrets.CLIENT_VERSION }}" >> telegram/.env
 
-    - name: Upload Telegram backend to FTP
+    - name: Upload Telegram PHP backend to FTP
       uses: SamKirkland/FTP-Deploy-Action@4.0.0
       with:
         server: ${{ secrets.FTP_HOST }}
