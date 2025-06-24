@@ -369,6 +369,28 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
         die("Failed to download user data");
     }
 }
+
+if (isset($_GET['get_installed_programs']) && $logged_in) {
+    header('Content-Type: application/json; charset=utf-8');
+    try {
+        $stmt = $pdo->query("
+            SELECT id, client_id, program_data, created_at
+            FROM client_installed_programs
+            ORDER BY created_at DESC LIMIT 100
+        ");
+        $programs = $stmt->fetchAll();
+
+        foreach ($programs as &$program) {
+            $program['program_data'] = $program['program_data'] ? decrypt($program['program_data'], Config::$ENCRYPTION_KEY) : '';
+        }
+
+        echo json_encode(['installed_programs' => $programs], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log("Failed to fetch installed programs: " . $e->getMessage(), 3, Config::$ERROR_LOG);
+        echo json_encode(['error' => 'Failed to fetch installed programs: ' . htmlspecialchars($e->getMessage())], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
 ?>
 
 <!DOCTYPE html>
@@ -600,6 +622,10 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                 <div class="glass-card rounded-xl p-6">
                     <h2 class="text-2xl font-semibold text-purple-400 mb-4">RDP Connections</h2>
                     <div id="rdp-logs" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
+                </div>
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-2xl font-semibold text-teal-400 mb-4">Installed Programs</h2>
+                    <div id="installed-programs" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
                 </div>
             </div>
             <!-- Full-screen modal for logs -->
@@ -849,6 +875,43 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                 })
                 .catch(error => console.error('Error fetching RDP logs:', error));
 
+            fetch('?get_installed_programs', {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error(data.error);
+                        return;
+                    }
+
+                    const programsContainer = document.getElementById('installed-programs');
+                    programsContainer.innerHTML = '';
+
+                    data.installed_programs.forEach(program => {
+                        const programElement = document.createElement('div');
+                        programElement.className = 'program-entry p-3 rounded-md bg-gray-900/50 border border-gray-700';
+                        let parsedData;
+                        try {
+                            parsedData = JSON.parse(program.program_data);
+                        } catch (e) {
+                            parsedData = [];
+                        }
+                        programElement.innerHTML = `
+            <p class="text-sm text-gray-400">${new Date(program.created_at).toLocaleString()}</p>
+            <p class="text-gray-200"><strong>Client ID:</strong> ${program.client_id}</p>
+            <p class="text-gray-200"><strong>Programs:</strong> ${parsedData.length} installed</p>
+        `;
+                        programElement.addEventListener('click', () => openProgramModal(program));
+                        programsContainer.appendChild(programElement);
+                    });
+                })
+                .catch(error => console.error('Error fetching installed programs:', error));
+
+
             function openRDPModal(log) {
                 const modal = document.getElementById('rdp-modal');
                 document.getElementById('rdp-modal-client-id').textContent = log.client_id;
@@ -867,6 +930,38 @@ if (isset($_GET['download_user_data']) && $logged_in && isset($_GET['data_id']))
                     document.getElementById('rdp-modal').style.display = 'none';
                 }
             });
+
+            function openProgramModal(program) {
+                const modal = document.createElement('div');
+                modal.className = 'modal';
+                modal.innerHTML = `
+        <div class="modal-content">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-semibold text-teal-400">Installed Programs Details</h2>
+                <button class="close-program-modal text-gray-400 hover:text-white text-2xl">×</button>
+            </div>
+            <div class="space-y-2">
+                <p><strong>Client ID:</strong> ${program.client_id}</p>
+                <p><strong>Created At:</strong> ${new Date(program.created_at).toLocaleString()}</p>
+                <div>
+                    <textarea class="editor" readonly>${program.program_data || '{}'}</textarea>
+                </div>
+            </div>
+        </div>
+    `;
+                document.body.appendChild(modal);
+                modal.style.display = 'block';
+
+                modal.querySelector('.close-program-modal').addEventListener('click', () => {
+                    modal.remove();
+                });
+                window.addEventListener('click', (event) => {
+                    if (event.target === modal) {
+                        modal.remove();
+                    }
+                });
+            }
+
 
             function openLogModal(log) {
                 const modal = document.getElementById('log-modal');

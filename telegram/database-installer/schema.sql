@@ -93,6 +93,15 @@ CREATE TABLE user_selections (
     PRIMARY KEY (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS client_installed_programs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(32) NOT NULL,
+    program_data MEDIUMTEXT,
+    created_at DATETIME NOT NULL,
+    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+    INDEX idx_client_id (client_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 INSERT INTO users (user_id, is_active, is_admin, created_at)
 VALUES ('YOUR_CHAT_ID', 1, 1, NOW())
 ON DUPLICATE KEY UPDATE is_admin = 1, is_active = 1;
