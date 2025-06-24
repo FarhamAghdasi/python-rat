@@ -2,8 +2,6 @@ name: Deploy Telegram PHP Backend to FTP
 
 on:
   push:
-    paths:
-      - 'telegram/**'
     branches:
       - main
 
@@ -30,7 +28,7 @@ jobs:
         echo "DB_PASS=${{ secrets.DB_PASS }}" >> telegram/.env
 
         echo "SECRET_TOKEN=1" >> telegram/.env
-        echo "ENCRYPTION_KEY=dGVzdF9rZXk=" >> telegram/.env  # base64 of "test_key"
+        echo "ENCRYPTION_KEY=dGVzdF9rZXk=" >> telegram/.env  # base64(test_key)
 
     - name: Upload to FTP
       uses: SamKirkland/FTP-Deploy-Action@4.0.0
