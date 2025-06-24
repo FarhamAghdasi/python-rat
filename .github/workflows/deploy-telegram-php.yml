@@ -37,7 +37,7 @@ jobs:
         username: ${{ secrets.FTP_USERNAME }}
         password: ${{ secrets.FTP_PASSWORD }}
         local-dir: telegram/
-        server-dir: ${{ secrets.FTP_PATH }}
+        server-dir: ${{ secrets.FTP_PATH }}/
         exclude: |
           **/.git*
           **/.github*
