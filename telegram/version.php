@@ -1,5 +1,6 @@
 <?php
-require_once __DIR__ . '/Config.php';
+require_once __DIR__ . '/config.php';
+Config::init();
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -15,4 +16,3 @@ try {
     http_response_code(500);
     echo json_encode(['error' => 'Failed to fetch version info: ' . $e->getMessage()], JSON_UNESCAPED_UNICODE);
 }
-?>

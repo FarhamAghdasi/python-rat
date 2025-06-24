@@ -1,11 +1,12 @@
-# پوشه‌های موقتی پایتون
 __pycache__/
 *.pyc
 output
 dist
 build
+ai-get.py
 
-# فایل لاگ
 *.log
 *.json
 *.spec
+.env
+telegram/Config.php

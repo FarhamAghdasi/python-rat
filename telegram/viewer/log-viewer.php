@@ -1,6 +1,7 @@
 <?php
 // log-viewer.php - Web dashboard for viewing client command logs and user data
 require_once __DIR__ . '/Config.php';
+Config::init();
 
 // Session settings
 ini_set('session.cookie_secure', 0); // Set to 1 for HTTPS in production
