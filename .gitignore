@@ -9,4 +9,3 @@ ai-get.py
 *.json
 *.spec
 .env
-telegram/Config.php
