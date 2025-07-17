@@ -9,7 +9,7 @@ import ctypes
 import time
 import re
 from typing import Dict, Optional, Any
-from config import Config
+from rat_config import Config
 from encryption.manager import EncryptionManager
 from network.communicator import ServerCommunicator
 

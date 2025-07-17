@@ -5,7 +5,7 @@ import os  # Added import
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from config import Config
+from rat_config import Config
 import logging  # Added for debugging
 
 class EncryptionManager:

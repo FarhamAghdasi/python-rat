@@ -9,7 +9,7 @@ import shutil
 import datetime
 import ctypes
 import winreg
-from config import Config
+from rat_config import Config
 from monitoring.rdp_controller import RDPController
 from encryption.manager import EncryptionManager
 from network.communicator import ServerCommunicator

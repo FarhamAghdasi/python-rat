@@ -1,6 +1,6 @@
 import unittest
 from encryption.manager import EncryptionManager, EncryptionError
-from config import Config
+from rat_config import Config
 
 class TestEncryptionManager(unittest.TestCase):
     def setUp(self):

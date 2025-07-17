@@ -1,0 +1,8 @@
+pyinstaller
+keyboard
+pyautogui
+Pillow
+requests
+python-dotenv
+packaging
+coverage

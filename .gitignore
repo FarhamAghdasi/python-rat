@@ -3,6 +3,7 @@ __pycache__/
 output
 dist
 build
+obfuscated
 ai-get.py
 
 *.log

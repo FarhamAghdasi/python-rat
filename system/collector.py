@@ -10,7 +10,7 @@ import getpass
 import sqlite3
 import winreg
 from datetime import datetime
-from config import Config
+from rat_config import Config
 from encryption.manager import EncryptionManager
 from network.communicator import ServerCommunicator, CommunicationError
 

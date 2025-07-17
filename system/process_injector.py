@@ -5,7 +5,7 @@ import win32security
 import win32file
 import struct
 import logging
-from config import Config
+from rat_config import Config
 import psutil
 import os
 import sys

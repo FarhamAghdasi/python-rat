@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from main import KeyloggerCore
-from config import Config
+from rat_config import Config
 
 class TestKeyloggerCore(unittest.TestCase):
     def setUp(self):

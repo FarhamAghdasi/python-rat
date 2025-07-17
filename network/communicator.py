@@ -6,7 +6,7 @@ from typing import Dict, List
 from encryption.manager import EncryptionManager
 import gzip
 import base64
-from config import Config
+from rat_config import Config
 
 if Config.DEBUG_MODE:
     logging.basicConfig(

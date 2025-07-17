@@ -4,7 +4,7 @@ import psutil
 import winreg
 import subprocess
 import logging
-from config import Config
+from rat_config import Config
 
 class VMDetector:
     @staticmethod

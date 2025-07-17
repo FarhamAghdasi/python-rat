@@ -7,7 +7,7 @@ import ctypes
 import time
 import json
 from datetime import datetime
-from config import Config
+from rat_config import Config
 from network.communicator import ServerCommunicator, CommunicationError
 from encryption.manager import EncryptionManager
 

