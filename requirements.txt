@@ -1,8 +1,41 @@
-pyinstaller
-keyboard
-pyautogui
-Pillow
-requests
-python-dotenv
-packaging
-coverage
+# PyInstaller for building executables
+pyinstaller>=5.13.0
+
+# Keyboard and input monitoring
+keyboard>=0.13.5
+pynput>=1.7.6
+
+# GUI and screenshots
+pyautogui>=0.9.54
+Pillow>=10.0.0
+mss>=9.0.1
+
+# System operations
+psutil>=5.9.5
+pyperclip>=1.8.2
+
+# Windows API
+pywin32>=306
+
+# Networking and HTTP
+requests>=2.31.0
+urllib3>=2.0.4
+certifi>=2023.7.22
+
+# Encryption
+cryptography>=41.0.3
+
+# Configuration and utilities
+python-dotenv>=1.0.0
+packaging>=23.1
+
+# Testing
+coverage>=7.3.0
+
+# Additional dependencies for complete build
+cffi>=1.15.1
+pycparser>=2.21
+six>=1.16.0
+certifi>=2023.7.22
+charset-normalizer>=3.2.0
+idna>=3.4
