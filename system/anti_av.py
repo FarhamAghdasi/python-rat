@@ -3,6 +3,8 @@ import winreg
 import subprocess
 import logging
 import platform
+import os  # Added import for os
+import uuid  # Added import for uuid
 from typing import List, Dict
 from rat_config import Config
 

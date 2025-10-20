@@ -58,17 +58,20 @@ class SystemCollector:
     def collect_system_info(self):
         self.logger.info("Collecting system information...")
         try:
-            self.results["system_info"] = {
+            system_info = {
                 "os_name": platform.system(),
                 "os_version": platform.version(),
                 "hostname": socket.gethostname(),
                 "username": getpass.getuser(),
                 "ram_total_mb": round(psutil.virtual_memory().total / (1024 * 1024), 2)
             }
+            self.results["system_info"] = system_info
             self.logger.info("System information collected successfully")
+            return system_info  # اضافه کردن return
         except Exception as e:
             self.results["system_info"]["error"] = str(e)
             self.logger.error(f"Failed to collect system info: {str(e)}")
+            return {"error": str(e)}  # بازگشت خطا در صورت بروز مشکل
 
     def collect_browser_data(self):
         self.logger.info("Collecting browser data...")
