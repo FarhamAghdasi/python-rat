@@ -130,7 +130,12 @@ jobs:
         curl --ftp-create-dirs `
           --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" `
           "ftp://${{ secrets.FTP_HOST }}${{ secrets.FTP_PATH }}/updates/" `
-          -Q "MKD updates" || Write-Output "Directory might already exist"
+          -Q "MKD updates"
+        if ($LASTEXITCODE -eq 0) {
+          Write-Output "Directory created successfully"
+        } else {
+          Write-Output "Directory might already exist"
+        }
     
     - name: Upload built EXE to FTP /updates/
       if: steps.check_upload.outputs.upload == 'true'
