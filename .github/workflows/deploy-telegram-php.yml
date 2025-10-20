@@ -42,20 +42,20 @@ jobs:
         python build.py
     
     - name: Verify build output
-      shell: bash
+      shell: powershell
       run: |
-        if [ ! -f "dist/KeyloggerClient.exe" ]; then
-          echo "ERROR: Build failed - KeyloggerClient.exe not found!"
+        if (-Not (Test-Path "dist/KeyloggerClient.exe")) {
+          Write-Output "ERROR: Build failed - KeyloggerClient.exe not found!"
           exit 1
-        fi
-        FILE_SIZE=$(stat -c%s "dist/KeyloggerClient.exe" 2>/dev/null || stat -f%z "dist/KeyloggerClient.exe")
-        FILE_SIZE_MB=$(echo "scale=2; $FILE_SIZE / 1048576" | bc)
-        echo "Build successful! File size: ${FILE_SIZE_MB} MB"
-        if (( $(echo "$FILE_SIZE_MB < 5" | bc -l) )); then
-          echo "WARNING: File size is suspiciously small (${FILE_SIZE_MB} MB). Expected ~80 MB."
-          echo "Checking build artifacts..."
-          ls -lh dist/
-        fi
+        }
+        $fileSize = (Get-Item "dist/KeyloggerClient.exe").Length
+        $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
+        Write-Output "Build successful! File size: $fileSizeMB MB"
+        if ($fileSizeMB -lt 5) {
+          Write-Output "WARNING: File size is suspiciously small ($fileSizeMB MB). Expected ~80 MB."
+          Write-Output "Checking build artifacts..."
+          Get-ChildItem -Path dist/ | Format-Table -AutoSize
+        }
     
     - name: Rename built EXE by version
       shell: bash
