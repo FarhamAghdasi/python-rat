@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/../config.php';
 Config::init();
 
 $webhookUrl = Config::$SERVER_URL;
@@ -9,7 +9,7 @@ $url = "https://api.telegram.org/bot" . Config::$BOT_TOKEN . "/setWebhook";
 $data = [
     'url' => $webhookUrl,
     'secret_token' => $secretToken,
-    'allowed_updates' => json_encode(['message'])
+    'allowed_updates' => json_encode(['message', 'callback_query'])  // اضافه کردن callback_query
 ];
 
 $ch = curl_init($url);

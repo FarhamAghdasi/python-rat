@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/../config.php';
 
 try {
     $dsn = "mysql:host=" . Config::$DB_HOST . ";charset=utf8mb4";

