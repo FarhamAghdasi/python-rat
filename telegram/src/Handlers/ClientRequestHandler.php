@@ -323,11 +323,18 @@ class ClientRequestHandler
             $this->logger->logWebhook("Command response received: command_id=$commandId, result_length=" . strlen($result));
 
             $resultData = json_decode($result, true);
+            // $stmt = $this->pdo->prepare(
+            //     "UPDATE client_commands SET status = 'completed', result = ?, completed_at = NOW() 
+            //     WHERE id = ?"
+            // );
+            // $stmt->execute([strlen($result) > 65000 ? 'Result too large' : $result, $commandId]);
+
             $stmt = $this->pdo->prepare(
                 "UPDATE client_commands SET status = 'completed', result = ?, completed_at = NOW() 
-                WHERE id = ?"
+            WHERE id = ?"
             );
-            $stmt->execute([strlen($result) > 65000 ? 'Result too large' : $result, $commandId]);
+            $stmt->execute([$result, $commandId]);
+
 
             $stmt = $this->pdo->prepare("SELECT client_id, command FROM client_commands WHERE id = ?");
             $stmt->execute([$commandId]);

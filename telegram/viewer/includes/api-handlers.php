@@ -48,18 +48,22 @@ function handleAPIRequests($pdo, $logged_in)
     }
 
     // UTF-8 cleaning functions
-    function cleanUtf8($string)
-    {
-        if (!is_string($string)) return $string;
-        if (function_exists('mb_convert_encoding')) {
-            $string = mb_convert_encoding($string, 'UTF-8', 'UTF-8');
+    if (!function_exists('cleanUtf8')) {
+        function cleanUtf8($string)
+        {
+            // اصلاح encoding رشته
+            if (!mb_check_encoding($string, 'UTF-8')) {
+                $string = mb_convert_encoding($string, 'UTF-8', 'auto');
+            }
+
+            // حذف کاراکترهای کنترل غیرمجاز
+            $string = preg_replace('/[^\x{0009}\x{000A}\x{000D}\x{0020}-\x{D7FF}\x{E000}-\x{FFFD}]+/u', ' ', $string);
+
+            return trim($string);
         }
-        $string = preg_replace('/[^\x{0009}\x{000A}\x{000D}\x{0020}-\x{D7FF}\x{E000}-\x{FFFD}]+/u', '', $string);
-        if (function_exists('iconv')) {
-            $string = @iconv('UTF-8', 'UTF-8//IGNORE', $string);
-        }
-        return $string;
     }
+
+
 
     function cleanArray($array)
     {
@@ -148,7 +152,23 @@ function handleAPIRequests($pdo, $logged_in)
             $json = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 
             if ($json === false) {
-                throw new Exception('JSON encoding failed: ' . json_last_error_msg());
+                // If JSON encoding fails, clean the data and try again
+                $cleaned_logs = array_map(function ($log) {
+                    return array_map(function ($value) {
+                        if (is_string($value)) {
+                            // Remove invalid UTF-8 characters
+                            return preg_replace('/[^\x{0009}\x{000A}\x{000D}\x{0020}-\x{D7FF}\x{E000}-\x{FFFD}]+/u', '', $value);
+                        }
+                        return $value;
+                    }, $log);
+                }, $processed_logs);
+
+                $response = ['logs' => $cleaned_logs];
+                $json = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+
+                if ($json === false) {
+                    throw new Exception('JSON encoding failed even after cleaning: ' . json_last_error_msg());
+                }
             }
 
             logInfo("Returning logs response", ['json_length' => strlen($json)]);

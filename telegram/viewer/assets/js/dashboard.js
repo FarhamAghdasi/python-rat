@@ -173,6 +173,27 @@ class DashboardManager {
     }
   }
 
+  safeJsonParse(str) {
+    try {
+      return JSON.parse(str);
+    } catch (error) {
+      console.error(
+        "JSON parse error:",
+        error,
+        "String:",
+        str.substring(0, 200)
+      );
+      // Return a safe fallback object
+      return {
+        client_id: "Unknown",
+        command: "Invalid JSON data",
+        status: "error",
+        result: "Data contains invalid JSON: " + error.message,
+        created_at: new Date().toISOString(),
+      };
+    }
+  }
+
   async fetchComprehensiveBrowserData() {
     try {
       const data = await this.fetchWithAuth("?get_comprehensive_browser_data");
@@ -520,29 +541,40 @@ class DashboardManager {
         : log.result
       : "No result";
 
+    // Safe JSON stringification with error handling
+    let safeJson = "{}";
+    try {
+      safeJson = JSON.stringify(log).replace(/'/g, "&#39;");
+    } catch (error) {
+      console.error("JSON stringify error for log:", log);
+      safeJson = JSON.stringify({
+        id: log.id,
+        client_id: log.client_id,
+        status: log.status,
+        command: "Invalid data",
+        result: "JSON encoding failed",
+      }).replace(/'/g, "&#39;");
+    }
+
     return `
-            <div class="entry-item" data-type="${type}" data-log='${JSON.stringify(
-      log
-    ).replace(/'/g, "&#39;")}' onclick="dashboard.openLogModal(this)">
-                <div class="entry-header">
-                    <span class="entry-time">${new Date(
-                      log.created_at
-                    ).toLocaleString()}</span>
-                    <span class="entry-status ${statusClass}">${
-      log.status
-    }</span>
-                </div>
-                <div class="entry-content">
-                    <p><strong>Client:</strong> ${log.client_id}</p>
-                    <p><strong>Command:</strong> ${this.escapeHtml(
-                      log.command
-                    )}</p>
-                    <p><strong>Result:</strong> ${this.escapeHtml(
-                      truncatedResult
-                    )}</p>
-                </div>
+        <div class="entry-item" data-type="${type}" data-log='${safeJson}' onclick="dashboard.openLogModal(this)">
+            <div class="entry-header">
+                <span class="entry-time">${new Date(
+                  log.created_at
+                ).toLocaleString()}</span>
+                <span class="entry-status ${statusClass}">${log.status}</span>
             </div>
-        `;
+            <div class="entry-content">
+                <p><strong>Client:</strong> ${log.client_id || "Unknown"}</p>
+                <p><strong>Command:</strong> ${this.escapeHtml(
+                  log.command || "No command"
+                )}</p>
+                <p><strong>Result:</strong> ${this.escapeHtml(
+                  truncatedResult
+                )}</p>
+            </div>
+        </div>
+    `;
   }
 
   createDataEntry(data) {
@@ -727,27 +759,45 @@ class DashboardManager {
   }
 
   openLogModal(element) {
-    const log = JSON.parse(element.getAttribute("data-log"));
-    const modal = document.getElementById("log-modal");
+    try {
+      const logData = element.getAttribute("data-log");
+      const log = this.safeJsonParse(logData);
 
-    document.getElementById("log-modal-client-id").textContent = log.client_id;
-    document.getElementById("log-modal-command").textContent = log.command;
-    document.getElementById("log-modal-status").textContent = log.status;
-    document.getElementById("log-modal-created-at").textContent = new Date(
-      log.created_at
-    ).toLocaleString();
-    document.getElementById("log-modal-completed-at").textContent =
-      log.completed_at ? new Date(log.completed_at).toLocaleString() : "N/A";
-    document.getElementById("log-modal-result-decrypted").value =
-      log.result || "No result";
-    document.getElementById("log-modal-result-raw").value =
-      log.raw_result || "No raw result";
+      const modal = document.getElementById("log-modal");
+      if (!modal) {
+        console.error("Log modal not found");
+        return;
+      }
 
-    const downloadBtn = document.getElementById("log-download-log");
-    downloadBtn.onclick = () =>
-      (window.location.href = `?download_log&log_id=${log.id}`);
+      document.getElementById("log-modal-client-id").textContent =
+        log.client_id || "Unknown";
+      document.getElementById("log-modal-command").textContent =
+        log.command || "No command";
+      document.getElementById("log-modal-status").textContent =
+        log.status || "unknown";
+      document.getElementById("log-modal-created-at").textContent =
+        log.created_at ? new Date(log.created_at).toLocaleString() : "N/A";
+      document.getElementById("log-modal-completed-at").textContent =
+        log.completed_at ? new Date(log.completed_at).toLocaleString() : "N/A";
 
-    this.openModal(modal);
+      const result = log.result || "No result";
+      document.getElementById("log-modal-result-decrypted").value = result;
+      document.getElementById("log-modal-result-raw").value =
+        log.raw_result || "No raw result";
+
+      const downloadBtn = document.getElementById("log-download-log");
+      if (downloadBtn && log.id) {
+        downloadBtn.onclick = () =>
+          (window.location.href = `?download_log&log_id=${log.id}`);
+      } else {
+        downloadBtn.style.display = "none";
+      }
+
+      this.openModal(modal);
+    } catch (error) {
+      console.error("Error opening log modal:", error);
+      this.showError("Failed to open log details");
+    }
   }
 
   openDataModal(element) {

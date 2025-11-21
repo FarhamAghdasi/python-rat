@@ -5,20 +5,21 @@ define('LOG_FILE', __DIR__ . '/../output/log.txt');
 define('LOG_ENABLED', true);
 define('LOG_LEVEL', 'DEBUG'); // DEBUG, INFO, WARNING, ERROR
 
-function writeLog($message, $level = 'INFO', $data = null) {
+function writeLog($message, $level = 'INFO', $data = null)
+{
     if (!LOG_ENABLED) return;
-    
+
     $levels = ['DEBUG' => 0, 'INFO' => 1, 'WARNING' => 2, 'ERROR' => 3];
     if (!isset($levels[$level]) || $levels[$level] < $levels[LOG_LEVEL]) return;
-    
+
     $logDir = dirname(LOG_FILE);
     if (!is_dir($logDir)) {
         mkdir($logDir, 0755, true);
     }
-    
+
     $timestamp = date('Y-m-d H:i:s');
     $logEntry = "[{$timestamp}] [{$level}] {$message}";
-    
+
     if ($data !== null) {
         if (is_array($data) || is_object($data)) {
             $logEntry .= " | Data: " . json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR);
@@ -26,20 +27,33 @@ function writeLog($message, $level = 'INFO', $data = null) {
             $logEntry .= " | Data: " . substr((string)$data, 0, 500);
         }
     }
-    
+
     $logEntry .= PHP_EOL;
-    
+
     error_log($logEntry);
     file_put_contents(LOG_FILE, $logEntry, FILE_APPEND | LOCK_EX);
 }
 
-function logDebug($msg, $data = null) { writeLog($msg, 'DEBUG', $data); }
-function logInfo($msg, $data = null) { writeLog($msg, 'INFO', $data); }
-function logWarning($msg, $data = null) { writeLog($msg, 'WARNING', $data); }
-function logError($msg, $data = null) { writeLog($msg, 'ERROR', $data); }
+function logDebug($msg, $data = null)
+{
+    writeLog($msg, 'DEBUG', $data);
+}
+function logInfo($msg, $data = null)
+{
+    writeLog($msg, 'INFO', $data);
+}
+function logWarning($msg, $data = null)
+{
+    writeLog($msg, 'WARNING', $data);
+}
+function logError($msg, $data = null)
+{
+    writeLog($msg, 'ERROR', $data);
+}
 
 // ===== DECRYPTION FUNCTION =====
-function decrypt($encryptedData, $key) {
+function decrypt($encryptedData, $key)
+{
     try {
         if (!$encryptedData || !is_string($encryptedData)) {
             logDebug("Decrypt: No data or invalid type", gettype($encryptedData));
@@ -81,7 +95,7 @@ function decrypt($encryptedData, $key) {
             logError("Decrypt: Invalid format - no :: separator");
             return '[Decryption failed: Invalid format]';
         }
-        
+
         list($ciphertext, $iv) = $parts;
 
         if (empty($ciphertext) || empty($iv)) {
@@ -95,23 +109,23 @@ function decrypt($encryptedData, $key) {
             logError("Decrypt: Invalid IV base64");
             return '[Decryption failed: Invalid IV]';
         }
-        
+
         logDebug("IV info", ['iv_b64_len' => strlen($iv), 'iv_decoded_len' => strlen($ivDecoded)]);
 
         // ===== KEY PREPARATION =====
         // Your key: nTds2GHvEWeOGJibjZuaf8kY5T5YWyfMx4J3B1NA0Jo=
         // This is a base64-encoded 32-byte key
-        
+
         $keyDecoded = base64_decode($key, true);
-        
+
         if ($keyDecoded === false) {
             logError("Decrypt: Key is not valid base64, using raw key");
             $keyDecoded = $key;
         }
-        
+
         $keyLen = strlen($keyDecoded);
         logDebug("Key info", ['key_b64_len' => strlen($key), 'key_decoded_len' => $keyLen]);
-        
+
         // If key is not 32 bytes after base64 decode, try other methods
         if ($keyLen !== 32) {
             // Try hex decode
@@ -137,7 +151,7 @@ function decrypt($encryptedData, $key) {
         }
 
         // ===== DECRYPTION ATTEMPTS =====
-        
+
         // Method 1: ciphertext is base64 encoded (most common)
         $decrypted = openssl_decrypt(
             $ciphertext,
@@ -197,16 +211,37 @@ function decrypt($encryptedData, $key) {
             'iv_len' => strlen($ivDecoded),
             'key_len' => strlen($keyDecoded)
         ]);
-        
-        return '[Decryption failed: ' . ($opensslError ?: 'Unknown error') . ']';
 
+        return '[Decryption failed: ' . ($opensslError ?: 'Unknown error') . ']';
     } catch (Exception $e) {
         logError("Decrypt exception", $e->getMessage());
         return '[Decryption error: ' . $e->getMessage() . ']';
     }
 }
 
-function formatJsonForDownload($jsonString) {
+function cleanUtf8($string)
+{
+    if (!is_string($string)) return $string;
+
+    // First, try to convert to UTF-8 if not already
+    if (function_exists('mb_detect_encoding') && function_exists('mb_convert_encoding')) {
+        $encoding = mb_detect_encoding($string, ['UTF-8', 'ISO-8859-1', 'Windows-1252'], true);
+        if ($encoding && $encoding !== 'UTF-8') {
+            $string = mb_convert_encoding($string, 'UTF-8', $encoding);
+        }
+    }
+
+    // Remove any invalid UTF-8 characters
+    $string = preg_replace('/[^\x{0009}\x{000A}\x{000D}\x{0020}-\x{D7FF}\x{E000}-\x{FFFD}]+/u', '', $string);
+
+    // Additional cleaning for JSON compatibility
+    $string = str_replace(["\r", "\n", "\t"], ['\\r', '\\n', '\\t'], $string);
+
+    return $string;
+}
+
+function formatJsonForDownload($jsonString)
+{
     if (empty($jsonString)) return 'No data';
 
     if (preg_match('/^\s*[\{\[]/', $jsonString)) {
@@ -218,7 +253,8 @@ function formatJsonForDownload($jsonString) {
     return $jsonString;
 }
 
-function validateSession() {
+function validateSession()
+{
     if (isset($_SESSION['login_time'])) {
         $session_duration = 8 * 60 * 60;
         if (time() - $_SESSION['login_time'] > $session_duration) {
@@ -230,7 +266,8 @@ function validateSession() {
     return isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true;
 }
 
-function detectDataType($data) {
+function detectDataType($data)
+{
     if (empty($data)) return 'empty';
     if (strpos($data, '::') !== false) return 'encrypted';
 
@@ -246,14 +283,15 @@ function detectDataType($data) {
 }
 
 // ===== DEBUG HELPER =====
-function testDecryption($encryptedSample = null) {
+function testDecryption($encryptedSample = null)
+{
     $key = Config::$ENCRYPTION_KEY;
-    
+
     $info = [
         'key_original' => substr($key, 0, 20) . '...',
         'key_length' => strlen($key),
     ];
-    
+
     // Decode key
     $keyDecoded = base64_decode($key, true);
     if ($keyDecoded !== false) {
@@ -262,7 +300,7 @@ function testDecryption($encryptedSample = null) {
     } else {
         $info['key_decode_failed'] = true;
     }
-    
+
     // Test with sample if provided
     if ($encryptedSample && strpos($encryptedSample, '::') !== false) {
         list($cipher, $iv) = explode('::', $encryptedSample, 2);
@@ -270,8 +308,7 @@ function testDecryption($encryptedSample = null) {
         $info['sample_iv_len'] = strlen($iv);
         $info['sample_iv_decoded_len'] = strlen(base64_decode($iv, true) ?: '');
     }
-    
+
     logInfo("Decryption Test Info", $info);
     return $info;
 }
-?>

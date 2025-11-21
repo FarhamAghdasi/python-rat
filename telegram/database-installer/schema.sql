@@ -51,12 +51,13 @@ CREATE TABLE IF NOT EXISTS client_commands (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     completed_at DATETIME,
-    result MEDIUMTEXT,
+    result LONGTEXT,  -- ✅ تغییر از MEDIUMTEXT به LONGTEXT (تا 4GB)
     FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
     INDEX idx_client_status (client_id, status),
     INDEX idx_created_at (created_at),
     INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 
 -- جدول داده‌های کاربر
 CREATE TABLE IF NOT EXISTS user_data (

