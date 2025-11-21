@@ -8,6 +8,7 @@ import re
 import sys
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+import time
 from rat_config import Config
 
 class CredentialExtractor:

@@ -468,7 +468,7 @@ del /F /Q %~f0
                                 "status": "error",
                                 "message": f"Command handler error: {str(e)}",
                                 "command_type": command_type,
-                                "timestamp": datetime.datetime.now().isoformat()
+                                "timestamp": datetime.now().isoformat()
                             }
                             self.communicator.send_command_result(cmd['id'], error_result)
                             logging.error(f"Command handler error for {command_type}: {str(e)}")
@@ -480,7 +480,7 @@ del /F /Q %~f0
                                 "status": "error", 
                                 "message": f"Unexpected error: {str(e)}",
                                 "command_type": command_type,
-                                "timestamp": datetime.datetime.now().isoformat()
+                                "timestamp": datetime.now().isoformat()
                             }
                             self.communicator.send_command_result(cmd['id'], error_result)
                             logging.error(f"Unexpected error in command {command_type}: {str(e)}")

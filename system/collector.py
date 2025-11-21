@@ -12,7 +12,7 @@ import winreg
 import shutil
 import tempfile
 from datetime import datetime, timedelta
-import datetime as dt  # اضافه کردن این خط
+from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from rat_config import Config

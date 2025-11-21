@@ -6,12 +6,12 @@ import logging
 import base64
 import os
 import shutil
-import datetime
 import time
 import ctypes
 import winreg
 import json
 import tempfile
+from datetime import datetime
 from rat_config import Config
 from monitoring.rdp_controller import RDPController
 from encryption.manager import EncryptionManager
@@ -794,7 +794,7 @@ class CommandHandler:
                 'cpu_usage': psutil.cpu_percent(interval=1),
                 'memory': psutil.virtual_memory()._asdict(),
                 'disk': psutil.disk_usage('/')._asdict(),
-                'boot_time': datetime.datetime.fromtimestamp(psutil.boot_time()).isoformat(),
+                'boot_time': datetime.fromtimestamp(psutil.boot_time()).isoformat(),
                 'timestamp': datetime.now().isoformat()
             }
             
