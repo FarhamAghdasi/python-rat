@@ -1,80 +1,86 @@
 # check_version.py
 import os
 import subprocess
+import sys
 
 def check_exe_version(exe_path):
     """Check version information in executable file"""
     try:
+        print(f"\n{'='*60}")
         print(f"Checking version info for: {exe_path}")
+        print(f"{'='*60}\n")
         
         if not os.path.exists(exe_path):
-            print(f"Executable not found: {exe_path}")
+            print(f"❌ Executable not found: {exe_path}")
             return
 
-        # Method 1: Using PowerShell with correct encoding
-        ps_script = f"""
-        $exe = Get-Item "{exe_path}"
-        $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe.FullName)
-        Write-Output "=== Version Information ==="
-        Write-Output "Company: $($versionInfo.CompanyName)"
-        Write-Output "Product: $($versionInfo.ProductName)" 
-        Write-Output "Description: $($versionInfo.FileDescription)"
-        Write-Output "Version: $($versionInfo.FileVersion)"
-        Write-Output "Copyright: $($versionInfo.LegalCopyright)"
-        Write-Output "Comments: $($versionInfo.Comments)"
-        Write-Output "=== End ==="
-        """
+        # Method 1: Using PowerShell
+        ps_script = f'''
+$exe = Get-Item "{exe_path}"
+$versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe.FullName)
+Write-Host "=== Version Information ===" -ForegroundColor Cyan
+Write-Host "Company Name    : $($versionInfo.CompanyName)"
+Write-Host "Product Name    : $($versionInfo.ProductName)"
+Write-Host "File Description: $($versionInfo.FileDescription)"
+Write-Host "File Version    : $($versionInfo.FileVersion)"
+Write-Host "Product Version : $($versionInfo.ProductVersion)"
+Write-Host "Copyright       : $($versionInfo.LegalCopyright)"
+Write-Host "Comments        : $($versionInfo.Comments)"
+Write-Host "Internal Name   : $($versionInfo.InternalName)"
+Write-Host "Original Name   : $($versionInfo.OriginalFilename)"
+Write-Host "==========================" -ForegroundColor Cyan
+'''
         
-        # Run PowerShell with UTF-8 encoding
         result = subprocess.run(
-            ["powershell", "-Command", ps_script], 
-            capture_output=True, 
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
             text=True,
             encoding='utf-8',
-            errors='ignore'
+            errors='replace'
         )
         
         if result.returncode == 0:
-            print("PowerShell version info:")
             print(result.stdout)
         else:
-            print("Failed to read version info via PowerShell")
+            print("❌ Failed to read version info via PowerShell")
             print("Error:", result.stderr)
+
+        # Method 2: Using pefile (if available)
+        try:
+            import pefile
+            pe = pefile.PE(exe_path)
+            
+            if hasattr(pe, 'VS_VERSIONINFO'):
+                print("\n✓ Version info structure detected in EXE")
+                if hasattr(pe, 'FileInfo'):
+                    for fileinfo in pe.FileInfo:
+                        if fileinfo.Key == b'StringFileInfo':
+                            for st in fileinfo.StringTable:
+                                for entry in st.entries.items():
+                                    print(f"  {entry[0].decode()}: {entry[1].decode()}")
+            else:
+                print("\n⚠ No version info structure found in EXE")
+        except ImportError:
+            print("\nℹ pefile not installed (pip install pefile)")
+        except Exception as e:
+            print(f"\n⚠ pefile check failed: {e}")
             
     except Exception as e:
-        print(f"Error checking version: {e}")
-
-def check_with_file_properties(exe_path):
-    """Check by opening file properties"""
-    try:
-        print("\nOpening file properties...")
-        os.startfile(exe_path, "properties")
-        print("File properties window opened - please check manually")
-    except Exception as e:
-        print(f"Could not open properties window: {e}")
+        print(f"❌ Error checking version: {e}")
 
 if __name__ == "__main__":
     exe_path = "dist/KeyloggerClient.exe"
     
+    if len(sys.argv) > 1:
+        exe_path = sys.argv[1]
+    
     if os.path.exists(exe_path):
-        print(f"File exists: {exe_path}")
-        print(f"File size: {os.path.getsize(exe_path)} bytes")
-        
-        # Check with PowerShell
+        print(f"✓ File exists: {exe_path}")
+        print(f"✓ File size: {os.path.getsize(exe_path):,} bytes\n")
         check_exe_version(exe_path)
-        
-        # Open properties
-        check_with_file_properties(exe_path)
-        
-        print(f"\nYou can also manually check by:")
-        print(f"1. Right-click on {exe_path}")
-        print(f"2. Select 'Properties'") 
-        print(f"3. Go to 'Details' tab")
-        
     else:
-        print(f"Executable not found: {exe_path}")
-        # List files in dist
+        print(f"❌ Executable not found: {exe_path}")
         if os.path.exists("dist"):
-            print("Files in dist directory:")
+            print("\n📁 Files in dist directory:")
             for file in os.listdir("dist"):
-                print(f"  - {file}")
+                print(f"   - {file}")

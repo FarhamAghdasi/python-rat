@@ -9,7 +9,7 @@ from PyInstaller.utils.win32.versioninfo import (
 
 block_cipher = None
 
-# تعریف version info مستقیم در spec file
+# تعریف version info
 version_info = VSVersionInfo(
   ffi=FixedFileInfo(
     filevers=(1, 1, 0, 0),
@@ -125,5 +125,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='icon.ico' if os.path.exists('icon.ico') else None,
-    version=version_info,  # استفاده از version info
+    version=version_info,
 )

