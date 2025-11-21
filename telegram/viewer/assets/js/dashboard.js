@@ -6,12 +6,6 @@ class DashboardManager {
     this.init();
   }
 
-  init() {
-    this.setupEventListeners();
-    this.fetchAllData();
-    this.startAutoRefresh();
-  }
-
   setupEventListeners() {
     // Refresh button
     const refreshBtn = document.getElementById("refresh-btn");
@@ -53,6 +47,22 @@ class DashboardManager {
     });
   }
 
+  async init() {
+    this.setupEventListeners();
+
+    // تست اتصال اولیه
+    const testResult = await this.testConnection();
+    console.log("Connection test result:", testResult);
+
+    if (testResult.success) {
+      this.fetchAllData();
+      this.startAutoRefresh();
+    } else {
+      console.error("Cannot connect to server:", testResult.error);
+      this.showError("Cannot connect to server: " + testResult.error);
+    }
+  }
+
   showLoading() {
     document.getElementById("loading-overlay").classList.add("active");
   }
@@ -86,42 +96,103 @@ class DashboardManager {
 
   async fetchWithAuth(url) {
     try {
+      console.log("Fetching URL:", url);
+
       const response = await fetch(url, {
         credentials: "include",
         headers: {
-          'Accept': 'application/json',
-        }
+          Accept: "application/json",
+          "Cache-Control": "no-cache",
+        },
       });
-      
+
+      console.log("Response status:", response.status);
+
       if (response.status === 401) {
         this.isAuthenticated = false;
-        const errorData = await response.json().catch(() => ({}));
-        
-        if (errorData.redirect || response.status === 401) {
-          console.warn('Authentication required, reloading page...');
-          setTimeout(() => {
-            window.location.reload();
-          }, 1000);
-          throw new Error('Authentication required');
-        }
+        console.warn("Authentication required, reloading page...");
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+        throw new Error("Authentication required");
       }
-      
+
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        console.error("HTTP error response:", errorText);
+        throw new Error(
+          `HTTP error! status: ${
+            response.status
+          }, response: ${errorText.substring(0, 200)}`
+        );
       }
-      
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        throw new Error('Response is not JSON');
+
+      // Check content type
+      const contentType = response.headers.get("content-type");
+      console.log("Content-Type:", contentType);
+
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await response.text();
+        console.error(
+          "Expected JSON but got:",
+          contentType,
+          "Content:",
+          text.substring(0, 500)
+        );
+        throw new Error(`Expected JSON but got: ${contentType}`);
       }
-      
-      return response.json();
+
+      // Try to parse JSON
+      const text = await response.text();
+      console.log("Raw response text length:", text.length);
+
+      if (!text.trim()) {
+        throw new Error("Empty response from server");
+      }
+
+      try {
+        const data = JSON.parse(text);
+        return data;
+      } catch (parseError) {
+        console.error(
+          "JSON parse error:",
+          parseError,
+          "Text sample:",
+          text.substring(0, 500)
+        );
+        throw new Error(`JSON parse error: ${parseError.message}`);
+      }
     } catch (error) {
-      if (error.message === 'Authentication required') {
+      if (error.message === "Authentication required") {
         throw error;
       }
-      console.error('Fetch error:', error);
+      console.error("Fetch error:", error);
       throw error;
+    }
+  }
+
+  async testConnection() {
+    try {
+      console.log("Testing server connection...");
+      const testUrl = "?get_logs&test=" + Date.now();
+      const response = await fetch(testUrl, {
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+
+      const text = await response.text();
+      console.log("Test response:", {
+        status: response.status,
+        contentType: response.headers.get("content-type"),
+        textLength: text.length,
+      });
+
+      return { success: true, status: response.status, text };
+    } catch (error) {
+      console.error("Connection test failed:", error);
+      return { success: false, error: error.message };
     }
   }
 
@@ -156,7 +227,7 @@ class DashboardManager {
         return;
       }
       console.error("Error fetching logs:", error);
-      this.showError('Failed to fetch logs');
+      this.showError("Failed to fetch logs");
     }
   }
 
@@ -174,7 +245,7 @@ class DashboardManager {
     } catch (error) {
       if (error.message === "Authentication required") return;
       console.error("Error fetching user data:", error);
-      this.showError('Failed to fetch user data');
+      this.showError("Failed to fetch user data");
     }
   }
 
@@ -191,7 +262,7 @@ class DashboardManager {
     } catch (error) {
       if (error.message === "Authentication required") return;
       console.error("Error fetching VM status:", error);
-      this.showError('Failed to fetch VM status');
+      this.showError("Failed to fetch VM status");
     }
   }
 
@@ -208,7 +279,7 @@ class DashboardManager {
     } catch (error) {
       if (error.message === "Authentication required") return;
       console.error("Error fetching WiFi logs:", error);
-      this.showError('Failed to fetch WiFi logs');
+      this.showError("Failed to fetch WiFi logs");
     }
   }
 
@@ -225,7 +296,7 @@ class DashboardManager {
     } catch (error) {
       if (error.message === "Authentication required") return;
       console.error("Error fetching RDP logs:", error);
-      this.showError('Failed to fetch RDP logs');
+      this.showError("Failed to fetch RDP logs");
     }
   }
 
@@ -245,7 +316,7 @@ class DashboardManager {
     } catch (error) {
       if (error.message === "Authentication required") return;
       console.error("Error fetching installed programs:", error);
-      this.showError('Failed to fetch installed programs');
+      this.showError("Failed to fetch installed programs");
     }
   }
 
@@ -262,12 +333,13 @@ class DashboardManager {
     } catch (error) {
       if (error.message === "Authentication required") return;
       console.error("Error fetching uploaded files:", error);
-      this.showError('Failed to fetch uploaded files');
+      this.showError("Failed to fetch uploaded files");
     }
   }
 
   showError(message) {
-    console.error('Dashboard Error:', message);
+    console.error("Dashboard Error:", message);
+    // می‌توانید اینجا یک notification به کاربر نشان دهید
   }
 
   renderLogs(containerId, logs, type) {

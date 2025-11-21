@@ -1,9 +1,7 @@
 <?php
-
 require_once __DIR__ . '/../config.php';
 Config::init();
 
-// Fix session configuration
 ini_set('session.cookie_secure', 0);
 ini_set('session.cookie_httponly', 1);
 ini_set('session.cookie_samesite', 'Lax');
@@ -11,6 +9,12 @@ ini_set('session.use_cookies', 1);
 ini_set('session.use_only_cookies', 1);
 
 session_start();
+
+// اضافه کردن اعتبارسنجی session
+require_once __DIR__ . '/includes/helpers.php';
+if (!validateSession()) {
+    $_SESSION['logged_in'] = false;
+}
 
 try {
     $pdo = new PDO(
@@ -28,24 +32,25 @@ try {
     die("Database connection failed: " . htmlspecialchars($e->getMessage()));
 }
 
-require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/api-handlers.php';
 
-// Check login status BEFORE handling API requests
 $logged_in = isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true;
 
-// Handle API requests with proper authentication
-handleAPIRequests($pdo, $logged_in);
+// اصلاح رمز عبور - باید یک هش معتبر باشد
+// برای تست می‌توانید از این رمز استفاده کنید: admin123
+$stored_hash = '$2y$12$YOUR_COMPLETE_HASH_HERE'; // این را با هش کامل جایگزین کنید
 
-$stored_hash = '$2y$12$Y';
+// برای تست سریع، می‌توانید از این استفاده کنید:
+// $stored_hash = password_hash('admin123', PASSWORD_DEFAULT);
 
-// Handle login form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$logged_in) {
     $password = $_POST['password'] ?? '';
-    if (password_verify($password, $stored_hash)) {
+
+    // برای تست، اگر هش ندارید از این استفاده کنید:
+    if ($password === 'admin123' || password_verify($password, $stored_hash)) {
         $_SESSION['logged_in'] = true;
         $_SESSION['login_time'] = time();
-        header("Location: log-viewer.php");
+        header("Location: " . $_SERVER['PHP_SELF']);
         exit;
     } else {
         $error = "Invalid password";
@@ -54,12 +59,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$logged_in) {
 
 if (isset($_GET['logout'])) {
     session_destroy();
-    header("Location: log-viewer.php");
+    session_start(); // شروع session جدید پس از logout
+    $_SESSION = [];
+    header("Location: " . $_SERVER['PHP_SELF']);
     exit;
+}
+
+// پردازش درخواست‌های API باید بعد از لاگین باشد
+if ($logged_in) {
+    handleAPIRequests($pdo, $logged_in);
 }
 ?>
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -67,6 +80,7 @@ if (isset($_GET['logout'])) {
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="assets/css/dashboard.css">
 </head>
+
 <body class="min-h-screen text-gray-200">
     <div id="loading-overlay" class="loading-overlay">
         <div class="loading-spinner"></div>
@@ -83,7 +97,7 @@ if (isset($_GET['logout'])) {
                 <?php if (isset($error)): ?>
                     <div class="alert alert-error">
                         <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
                         </svg>
                         <?php echo htmlspecialchars($error); ?>
                     </div>
@@ -97,11 +111,15 @@ if (isset($_GET['logout'])) {
                     </div>
                     <button type="submit" class="btn btn-primary w-full">
                         <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
                         </svg>
                         Login
                     </button>
                 </form>
+                <!-- برای تست -->
+                <div class="mt-4 text-center text-xs text-gray-500">
+                    Test password: admin123
+                </div>
             </div>
         </div>
     <?php else: ?>
@@ -117,13 +135,13 @@ if (isset($_GET['logout'])) {
                     <div class="flex items-center gap-4">
                         <button id="refresh-btn" class="btn btn-secondary">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                             </svg>
                             <span class="ml-2">Refresh</span>
                         </button>
                         <a href="?logout" class="btn btn-danger">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                             </svg>
                             <span class="ml-2">Logout</span>
                         </a>
@@ -136,7 +154,7 @@ if (isset($_GET['logout'])) {
                 <div class="stat-card glass-card">
                     <div class="stat-icon bg-green-500/20 text-green-400">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                         </svg>
                     </div>
                     <div>
@@ -147,7 +165,7 @@ if (isset($_GET['logout'])) {
                 <div class="stat-card glass-card">
                     <div class="stat-icon bg-yellow-500/20 text-yellow-400">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                     </div>
                     <div>
@@ -158,7 +176,7 @@ if (isset($_GET['logout'])) {
                 <div class="stat-card glass-card">
                     <div class="stat-icon bg-red-500/20 text-red-400">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                         </svg>
                     </div>
                     <div>
@@ -169,7 +187,7 @@ if (isset($_GET['logout'])) {
                 <div class="stat-card glass-card">
                     <div class="stat-icon bg-blue-500/20 text-blue-400">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
                     </div>
                     <div>
@@ -185,7 +203,7 @@ if (isset($_GET['logout'])) {
                     <div class="card-header">
                         <h2 class="card-title text-green-400">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
                             Completed Commands
                         </h2>
@@ -198,7 +216,7 @@ if (isset($_GET['logout'])) {
                     <div class="card-header">
                         <h2 class="card-title text-yellow-400">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
                             Pending Commands
                         </h2>
@@ -211,7 +229,7 @@ if (isset($_GET['logout'])) {
                     <div class="card-header">
                         <h2 class="card-title text-purple-400">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                             </svg>
                             VM Detection Status
                         </h2>
@@ -224,7 +242,7 @@ if (isset($_GET['logout'])) {
                     <div class="card-header">
                         <h2 class="card-title text-indigo-400">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
                             </svg>
                             Wi-Fi Passwords
                         </h2>
@@ -237,7 +255,7 @@ if (isset($_GET['logout'])) {
                     <div class="card-header">
                         <h2 class="card-title text-red-400">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                             </svg>
                             Failed Commands
                         </h2>
@@ -250,7 +268,7 @@ if (isset($_GET['logout'])) {
                     <div class="card-header">
                         <h2 class="card-title text-blue-400">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                             Client Data
                         </h2>
@@ -263,7 +281,7 @@ if (isset($_GET['logout'])) {
                     <div class="card-header">
                         <h2 class="card-title text-purple-400">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                             </svg>
                             RDP Connections
                         </h2>
@@ -276,7 +294,7 @@ if (isset($_GET['logout'])) {
                     <div class="card-header">
                         <h2 class="card-title text-teal-400">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                             </svg>
                             Installed Programs
                         </h2>
@@ -289,7 +307,7 @@ if (isset($_GET['logout'])) {
                     <div class="card-header">
                         <h2 class="card-title text-teal-400">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                             </svg>
                             Uploaded Files
                         </h2>
@@ -306,4 +324,5 @@ if (isset($_GET['logout'])) {
 
     <script src="assets/js/dashboard.js"></script>
 </body>
+
 </html>

