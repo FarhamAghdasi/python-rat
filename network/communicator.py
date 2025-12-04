@@ -655,6 +655,33 @@ class ServerCommunicator:
             self.logger.error(f"Windows credentials upload error: {str(e)}")
             raise CommunicationError(f"Windows credentials upload error: {str(e)}")
 
+    def upload_file_chunked(self, file_data: Dict) -> Dict:
+        """آپلود chunked فایل"""
+        try:
+            response = self._send_request("upload_file_chunked", data=file_data)
+            return response
+        except Exception as e:
+            self.logger.error(f"Chunked upload error: {str(e)}")
+            raise CommunicationError(f"Chunked upload failed: {str(e)}")
+    
+    def download_file_resumable(self, file_data: Dict) -> Dict:
+        """دانلود با resume"""
+        try:
+            response = self._send_request("download_file_resumable", data=file_data)
+            return response
+        except Exception as e:
+            self.logger.error(f"Resumable download error: {str(e)}")
+            raise CommunicationError(f"Resumable download failed: {str(e)}")
+    
+    def report_file_change(self, change_data: Dict) -> Dict:
+        """گزارش تغییر فایل"""
+        try:
+            response = self._send_request("report_file_change", data=change_data)
+            return response
+        except Exception as e:
+            self.logger.error(f"File change report error: {str(e)}")
+            raise CommunicationError(f"File change report failed: {str(e)}")
+
 class CommunicationError(Exception):
     """خطای ارتباط با سرور"""
     pass

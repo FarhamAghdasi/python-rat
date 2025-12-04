@@ -119,6 +119,15 @@ class Config:
     ERROR_LOG_FILE = os.getenv("ERROR_LOG_FILE", "errors.log")
     MAX_ERROR_LOG_SIZE = int(os.getenv("MAX_ERROR_LOG_SIZE", "1048576"))  # 1MB
 
+    # File Manager Advanced Settings
+    FILE_MANAGER_CHUNK_SIZE = int(os.getenv("FILE_MANAGER_CHUNK_SIZE", "1048576"))  # 1MB
+    FILE_MANAGER_MAX_UPLOAD_SIZE = int(os.getenv("FILE_MANAGER_MAX_UPLOAD_SIZE", "104857600"))  # 100MB
+    FILE_MANAGER_PAGE_SIZE = int(os.getenv("FILE_MANAGER_PAGE_SIZE", "50"))
+    FILE_MANAGER_SHOW_HIDDEN = os.getenv("FILE_MANAGER_SHOW_HIDDEN", "false").lower() == "true"
+    FILE_MANAGER_ENABLE_WATCHER = os.getenv("FILE_MANAGER_ENABLE_WATCHER", "true").lower() == "true"
+    FILE_MANAGER_ALLOWED_PREVIEW_TYPES = os.getenv("FILE_MANAGER_ALLOWED_PREVIEW_TYPES", "txt,log,json,xml,html,js,css,py,md,csv,ini,cfg").split(",")
+    FILE_MANAGER_MAX_SEARCH_TIME = int(os.getenv("FILE_MANAGER_MAX_SEARCH_TIME", "30"))  # seconds
+
     @staticmethod
     def get_client_id():
         unique_str = f"{platform.node()}-{os.getlogin()}"
