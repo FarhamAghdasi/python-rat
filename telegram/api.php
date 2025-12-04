@@ -20,6 +20,7 @@ Autoloader::register();
 
 use Handlers\ClientRequestHandler;
 use Handlers\WebhookHandler;
+use Handlers\FileManagerHandler;
 use Utils\DirectoryInitializer;
 use Database\DatabaseConnection;
 
@@ -59,10 +60,12 @@ try {
     // ایجاد هندلرها
     $clientHandler = new ClientRequestHandler($pdo);
     $webhookHandler = new WebhookHandler($pdo);
+    $fileManagerHandler = new FileManagerHandler($pdo);
 
     // تشخیص نوع درخواست
     $isWebhook = false;
     $isClient = false;
+    $isFileManager = false;
     $authSource = 'none';
 
     // بررسی Webhook
@@ -74,15 +77,38 @@ try {
         $authSource = 'telegram_webhook';
         error_log("Request authenticated as Telegram webhook");
     }
-    // بررسی Client
+    // بررسی Client (شامل File Manager)
     elseif (
         (isset($_SERVER['HTTP_X_SECRET_TOKEN']) && $_SERVER['HTTP_X_SECRET_TOKEN'] === Config::$SECRET_TOKEN) ||
         (isset($input['token']) && $input['token'] === Config::$SECRET_TOKEN) ||
         (isset($_POST['token']) && $_POST['token'] === Config::$SECRET_TOKEN)
     ) {
-        $isClient = true;
-        $authSource = 'client_token';
-        error_log("Request authenticated as client");
+        // تشخیص اینکه درخواست File Manager است یا Client Request عادی
+        if (isset($input['action']) && str_starts_with($input['action'], 'file_')) {
+            $isFileManager = true;
+            $authSource = 'file_manager';
+            error_log("Request authenticated as file manager");
+        } else {
+            $isClient = true;
+            $authSource = 'client_token';
+            error_log("Request authenticated as client");
+        }
+    }
+    // بررسی Client از طریق POST data (برای File Manager)
+    elseif (!empty($_POST)) {
+        $postToken = $_POST['token'] ?? $_POST['X-Secret-Token'] ?? null;
+        if ($postToken === Config::$SECRET_TOKEN) {
+            $action = $_POST['action'] ?? $input['action'] ?? null;
+            if ($action && str_starts_with($action, 'file_')) {
+                $isFileManager = true;
+                $authSource = 'file_manager_post';
+                error_log("Request authenticated as file manager (POST)");
+            } else {
+                $isClient = true;
+                $authSource = 'client_token_post';
+                error_log("Request authenticated as client (POST)");
+            }
+        }
     }
 
     // پردازش درخواست
@@ -92,12 +118,19 @@ try {
     } elseif ($isClient) {
         error_log("Processing client request");
         $clientHandler->handle($input);
+    } elseif ($isFileManager) {
+        error_log("Processing file manager request");
+        // برای File Manager، از $_POST هم استفاده کن
+        $fileManagerData = array_merge($input, $_POST);
+        $fileManagerHandler->handle($fileManagerData);
     } else {
         error_log("Unauthorized access attempt from IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
         error_log("Headers: " . json_encode([
             'X-Secret-Token' => $_SERVER['HTTP_X_SECRET_TOKEN'] ?? 'not set',
             'X-Telegram-Bot-Api-Secret-Token' => $_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] ?? 'not set'
         ]));
+        error_log("POST data: " . json_encode($_POST));
+        error_log("Input data: " . json_encode($input));
         
         http_response_code(401);
         die(json_encode(['error' => 'Unauthorized']));

